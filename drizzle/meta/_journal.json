@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790759064684,
+      "tag": "0000_lethal_shadow_king",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790759252283,
+      "tag": "0001_keen_eddie_brock",
+      "breakpoints": true
+    }
+  ]
+}
