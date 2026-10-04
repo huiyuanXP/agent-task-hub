@@ -54,3 +54,10 @@ export const authorizationAudit = sqliteTable('authorization_audit', {
   index('authorization_audit_grant').on(t.owner, t.authorizationId, t.at),
   check('authorization_audit_kind', sql`${t.kind} IN ('requested','approved','rejected','revoked')`),
 ]);
+
+export const authRevocations = sqliteTable('auth_revocations', {
+  tokenHash: text('token_hash').primaryKey().notNull(),
+  owner: text('owner').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, t => [index('auth_revocations_expiry').on(t.expiresAt)]);

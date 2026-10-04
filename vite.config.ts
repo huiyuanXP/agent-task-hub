@@ -52,6 +52,7 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: { "import.meta.env.SITES_MOCK_AUTH": JSON.stringify(!managedLinux) },
     server: {
       host: "127.0.0.1",
       strictPort: true,

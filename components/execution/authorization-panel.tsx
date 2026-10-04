@@ -6,14 +6,14 @@ import type { Authorization, OperationDescriptor, PrepareExecutionInput, Resourc
 
 type Catalog = { operations: OperationDescriptor[]; ceilings: ResourceBudget };
 const active = (run: Run | null) => !!run && ["queued", "running", "waiting"].includes(run.state);
-async function api<T>(url: string, body?: unknown): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
+async function api<T>(pendingResponse: Promise<Response>): Promise<T> {
+  const response = await pendingResponse;
   const result = await response.json() as T & { error?: string };
   if (!response.ok) throw Error(result.error || "授权请求失败");
   return result as T;
 }
 /** A dedicated owner decision flow; planning prose is never converted to authority. */
-export function AuthorizationPanel({ tickets }: { tickets: Row[] }) {
+export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { tickets: Row[]; onAuthenticationDenied: () => void }) {
   const [selectedId, setSelectedId] = useState("");
   const ticket = tickets.find(t => t.id === selectedId) ?? tickets[0];
   const ticketId = ticket?.id, revision = ticket?.revision;
@@ -23,46 +23,64 @@ export function AuthorizationPanel({ tickets }: { tickets: Row[] }) {
   const [budget, setBudget] = useState<ResourceBudget>({ timeoutMs: 30000, memoryMb: 256, cpus: 1, pids: 64 });
   const [expiryMinutes, setExpiryMinutes] = useState(10);
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState("");
-  const sequence = useRef(0), nextAttempt = useRef(1);
+  const sequence = useRef(0), nextAttempt = useRef(1), lifecycle = useRef(0);
   const storageKey = `execution-request:${ticketId}:v${revision}`;
+  const request = useCallback(async (url: string, isCurrent: () => boolean, body?: unknown) => {
+    const response = await fetch(url, { cache: "no-store", ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
+    if (!isCurrent()) throw Error("请求已失效");
+    // Inspect every response before JSON parsing or a sibling request can delay it.
+    if (response.status === 401 || response.status === 403) {
+      ++lifecycle.current;
+      ++sequence.current;
+      onAuthenticationDenied();
+      throw Error("登录已失效或无权访问");
+    }
+    return response;
+  }, [onAuthenticationDenied]);
   const refresh = useCallback(async () => {
     if (!ticketId || !revision) return;
-    const current = ++sequence.current;
+    const current = ++sequence.current, generation = lifecycle.current;
+    const isCurrent = () => sequence.current === current && lifecycle.current === generation;
     try {
       const [nextCatalog, listed] = await Promise.all([
-        api<Catalog>(`/api/authorization?ticketId=${encodeURIComponent(ticketId)}&expectedRevision=${revision}`),
-        api<{ runs: Run[] }>(`/api/execution?ticketId=${encodeURIComponent(ticketId)}`),
+        api<Catalog>(request(`/api/authorization?ticketId=${encodeURIComponent(ticketId)}&expectedRevision=${revision}`, isCurrent)),
+        api<{ runs: Run[] }>(request(`/api/execution?ticketId=${encodeURIComponent(ticketId)}`, isCurrent)),
       ]);
+      if (!isCurrent()) return;
       const latest = listed.runs.find(r => active(r)) ?? listed.runs[0] ?? null;
       let nextAuthorization: Authorization | null = null;
       if (latest) {
         // Older model-only Runs can have an authorization reference with no grant.
-        const response = await fetch(`/api/authorization?id=${encodeURIComponent(latest.authorizationId)}`, { cache: "no-store" });
+        const response = await request(`/api/authorization?id=${encodeURIComponent(latest.authorizationId)}`, isCurrent);
         if (response.ok) nextAuthorization = (await response.json() as { authorization: Authorization }).authorization;
         else if (response.status !== 404) throw Error("无法读取授权状态");
       }
-      if (sequence.current === current) {
+      if (isCurrent()) {
         setCatalog(nextCatalog); setRun(latest); setAuthorization(nextAuthorization);
         nextAttempt.current = Math.max(0, ...listed.runs.map(r => r.attempt)) + 1;
         setError(""); setLoading(false);
       }
-    } catch (e) { if (sequence.current === current) { setError(e instanceof Error ? e.message : "授权状态不可用"); setLoading(false); } }
-  }, [ticketId, revision]);
+    } catch (e) { if (isCurrent()) { setError(e instanceof Error ? e.message : "授权状态不可用"); setLoading(false); } }
+  }, [ticketId, revision, request]);
   useEffect(() => {
-    const pendingSequence = sequence;
-    const startup = window.setTimeout(() => { setLoading(true); setCatalog(null); setRun(null); setAuthorization(null); void refresh(); }, 0);
+    const pendingSequence = sequence, generation = lifecycle;
+    ++generation.current;
+    const startup = window.setTimeout(() => { setBusy(false); setLoading(true); setCatalog(null); setRun(null); setAuthorization(null); void refresh(); }, 0);
     const interval = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 5000);
-    return () => { ++pendingSequence.current; window.clearTimeout(startup); window.clearInterval(interval); };
+    return () => { ++pendingSequence.current; ++generation.current; window.clearTimeout(startup); window.clearInterval(interval); };
   }, [refresh]);
-  async function write(action: () => Promise<void>) {
+  async function write(action: (isCurrent: () => boolean) => Promise<void>) {
+    const generation = lifecycle.current;
+    const isCurrent = () => lifecycle.current === generation;
+    ++sequence.current;
     setBusy(true); setError("");
-    try { await action(); await refresh(); }
-    catch (e) { setError(e instanceof Error ? e.message : "授权请求失败；可用相同请求重试"); }
-    finally { setBusy(false); }
+    try { await action(isCurrent); if (isCurrent()) await refresh(); }
+    catch (e) { if (isCurrent()) setError(e instanceof Error ? e.message : "授权请求失败；可用相同请求重试"); }
+    finally { if (isCurrent()) setBusy(false); }
   }
   function requestAuthorization() {
     if (!ticket || !catalog) return;
-    void write(async () => {
+    void write(async (isCurrent) => {
       const saved = sessionStorage.getItem(storageKey);
       let input: PrepareExecutionInput;
       if (saved) input = JSON.parse(saved) as PrepareExecutionInput;
@@ -72,23 +90,24 @@ export function AuthorizationPanel({ tickets }: { tickets: Row[] }) {
         // Persist before the network write. Lost responses and reloads retain this identity.
         sessionStorage.setItem(storageKey, JSON.stringify(input));
       }
-      const result = await api<{ run: Run; authorization: Authorization }>("/api/authorization", { action: "prepare", ...input });
+      const result = await api<{ run: Run; authorization: Authorization }>(request("/api/authorization", isCurrent, { action: "prepare", ...input }));
+      if (!isCurrent()) return;
       setRun(result.run); setAuthorization(result.authorization);
     });
   }
   function decide(outcome: "approved" | "rejected" | "revoked") {
     if (!authorization) return;
-    void write(async () => {
+    void write(async (isCurrent) => {
       const key = `execution-decision:${authorization.id}:${outcome}`;
       const decisionId = sessionStorage.getItem(key) ?? crypto.randomUUID(); sessionStorage.setItem(key, decisionId);
-      await api("/api/authorization", { action: outcome === "revoked" ? "revoke" : "decide", authorizationId: authorization.id, decisionId, ...(outcome === "revoked" ? {} : { outcome }) });
+      await api(request("/api/authorization", isCurrent, { action: outcome === "revoked" ? "revoke" : "decide", authorizationId: authorization.id, decisionId, ...(outcome === "revoked" ? {} : { outcome }) }));
     });
   }
   function cancelRun() {
     if (!run) return;
-    void write(async () => {
-      await api("/api/execution", { action: "cancel", id: run.id, expectedVersion: run.version });
-      sessionStorage.removeItem(storageKey);
+    void write(async (isCurrent) => {
+      await api(request("/api/execution", isCurrent, { action: "cancel", id: run.id, expectedVersion: run.version }));
+      if (isCurrent()) sessionStorage.removeItem(storageKey);
     });
   }
   if (!tickets.length) return null;
