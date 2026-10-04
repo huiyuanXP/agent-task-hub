@@ -1,0 +1,47 @@
+name: Regression checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'strix/**'
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/browser/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: npm run install:ci
+      - run: npm run lint
+      - run: npx --no-install tsc --noEmit
+      - run: npm run build
+      - run: npm ci --prefix tests/browser
+      - run: npx --prefix tests/browser playwright install --with-deps chromium
+      - run: npm test
+      - name: Upload failure logs and synthetic browser evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-failure
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            test-results/**/*.log
+            test-results/**/*-evidence.json
+            test-results/**/fixtures.json
+            test-results/**/*.png

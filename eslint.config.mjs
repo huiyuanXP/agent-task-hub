@@ -13,6 +13,13 @@ const eslintConfig = defineConfig([
     "build/**",
     ".agents/**",
     "next-env.d.ts",
+    // Checkout-local agent workspaces, scratch files and generated runtime data.
+    ".worktrees/**",
+    ".superpowers/**",
+    "test-results/**",
+    ".wrangler/**",
+    ".sites-runtime/**",
+    ".vinext/**",
   ]),
   {
     files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],

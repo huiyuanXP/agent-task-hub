@@ -43,6 +43,10 @@ Open the loopback URL printed by the dev server (normally `http://localhost:5173
 
 The `.env.example` contains only optional non-secret tooling switches. Local preview needs no copied production secrets. The application reads the `DB` runtime binding rather than a database connection-string variable.
 
+## Regression checks
+
+Run `npm ci --prefix tests/browser` and `npx --prefix tests/browser playwright install --with-deps chromium` after the locked application install, then run `npm test`. The suite builds a fresh temporary application and D1 database, selects loopback ports and cleans up its servers after each run. `npm run test:unit` runs harness boundary checks; `npm run test:browser-policy` checks redirected requests and browser network isolation; `npm run test:integration` runs synthetic API/MCP and browser regressions. See [testing instructions](docs/TESTING.md) for parallel runs, artifacts and the synthetic identity boundary. PRs and pushes to `main` or `strix/**` run the same checks in CI.
+
 ## Repository layout
 
 - `app/page.tsx`, `app/globals.css`: workspace UI
