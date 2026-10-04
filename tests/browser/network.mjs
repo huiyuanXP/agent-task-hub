@@ -1,11 +1,17 @@
 import { createServer, request as httpRequest } from 'node:http';
+import { isAbsolute } from 'node:path';
+import { access } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { loopbackUrl } from '../harness.mjs';
 
 // Chromium bypasses proxies for loopback by default. <-loopback> removes that
 // bypass, so native redirects, popups, frames and workers all cross this gate.
 export async function launchRestrictedBrowser(chromium, values, options = {}) {
+  const executablePath = process.env.TEST_CHROMIUM_EXECUTABLE;
+  if (executablePath !== undefined && !isAbsolute(executablePath)) throw Error('TEST_CHROMIUM_EXECUTABLE must be an absolute trusted local path');
+  if (executablePath !== undefined) await access(executablePath, constants.X_OK);
   const origins = values.map(value => loopbackUrl(value).origin);
-  const blocked = [], errors = [], sockets = new Set(), tunnels = new WeakMap();
+  const blocked = [], requestedExternal = [], errors = [], sockets = new Set(), tunnels = new WeakMap();
   let browser, closing;
   const track = socket => {
     if (!sockets.has(socket)) {
@@ -88,16 +94,21 @@ export async function launchRestrictedBrowser(chromium, values, options = {}) {
     return closing;
   };
   try {
-    browser = await chromium.launch({ headless: true, proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
     browser.once('disconnected', () => { void closeProxy().catch(error => errors.push(error.message)); });
     const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
+    context.on('request', request => {
+      const url = new URL(request.url());
+      if (['http:', 'https:'].includes(url.protocol) && !origins.includes(url.origin)) requestedExternal.push(url.origin);
+    });
     await context.routeWebSocket('**/*', webSocket => {
       const url = new URL(webSocket.url());
       if (url.protocol === 'ws:' && origins.includes(url.origin.replace(/^ws:/, 'http:'))) return webSocket.connectToServer();
       blocked.push(url.origin);
+      requestedExternal.push(url.origin);
       webSocket.close();
     });
-    return { browser, context, blocked, errors, proxyOrigin, close: async () => {
+    return { browser, context, blocked, requestedExternal, errors, proxyOrigin, close: async () => {
       try { await browser.close(); } finally { await closeProxy(); }
     } };
   } catch (error) {

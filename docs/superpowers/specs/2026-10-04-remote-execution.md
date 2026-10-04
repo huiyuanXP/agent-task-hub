@@ -241,5 +241,14 @@ SQLite/D1 for storage tests; Docker for isolation/backend integration. Tests
 must demonstrate RED before implementation, then GREEN. Run lint, typecheck,
 build, complete execution tests and the applicable API/browser regressions.
 Fresh database per run; loopback listeners; no shared development database.
+Browser regression tooling may select a trusted absolute local Chromium through
+`TEST_CHROMIUM_EXECUTABLE` when its locked browser download is blocked; validate
+the prerequisite before framework allocation and preserve every proxy/origin
+restriction. Default CI uses the locked Playwright browser. This is test-only
+configuration, never a guest or product payload capability.
+Retain every proxy-blocked origin and separately record page/context requests:
+the UI's strict expected external-request check applies to application traffic,
+while browser background traffic remains blocked and visible. Verify actual
+forbidden page requests are recorded and cannot contact forbidden servers.
 Each issue is independently reviewed and merged before claiming the next.
 No placeholders, unfinished branches or new Tickets standing in for acceptance.

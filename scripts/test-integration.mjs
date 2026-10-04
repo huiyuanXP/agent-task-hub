@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile, readFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
+import { constants } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createWorkspace, freePort, loopbackUrl, startChild, runChild, stopChild, waitForHttp } from '../tests/harness.mjs';
 
@@ -14,9 +15,13 @@ process.on('SIGINT', onInt);
 process.on('SIGTERM', onTerm);
 
 // Do not pass provider credentials or checkout-specific runtime switches to children.
-const env = Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'CI', 'PLAYWRIGHT_BROWSERS_PATH'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
+const env = Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'CI', 'PLAYWRIGHT_BROWSERS_PATH', 'TEST_CHROMIUM_EXECUTABLE'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
 Object.assign(env, { CLOUDFLARE_CF_FETCH_ENABLED: 'false', WRANGLER_SEND_METRICS: 'false', WRANGLER_WRITE_LOGS: 'false', NO_COLOR: '1' });
 try {
+  if (env.TEST_CHROMIUM_EXECUTABLE !== undefined) {
+    if (!isAbsolute(env.TEST_CHROMIUM_EXECUTABLE)) throw Error('TEST_CHROMIUM_EXECUTABLE must be an absolute trusted local path');
+    await access(env.TEST_CHROMIUM_EXECUTABLE, constants.X_OK);
+  }
   await mkdir(join(root, 'test-results'), { recursive: true });
   artifacts = await mkdtemp(join(root, 'test-results/run-'));
   await access(join(root, 'tests/browser/node_modules/playwright/index.mjs'));

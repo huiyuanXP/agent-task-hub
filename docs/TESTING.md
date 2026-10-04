@@ -1,6 +1,6 @@
 # Regression checks
 
-Use Node 22.23.3, npm and Python 3 on Linux or macOS. The harness uses POSIX process groups for cleanup. CI runs on Ubuntu. Install the application from its existing lock and Chromium from the separate Playwright 1.58.2 lock:
+Use Node 22.23.3, npm and Python 3 on Linux for the complete suite. The browser/API harness alone also supports macOS. The harness uses POSIX process groups for cleanup. CI runs on Ubuntu. Install the application from its existing lock and Chromium from the separate Playwright 1.58.2 lock:
 
 ```sh
 npm run install:ci
@@ -14,7 +14,7 @@ npm test
 
 On machines where Chromium's system libraries are already available, `npx --prefix tests/browser playwright install chromium` is sufficient. The application lockfile does not include browser tooling and must not be regenerated to install it.
 
-`npm run test:unit` exercises workspace copying, URL validation, port allocation, command failures, readiness deadlines and server cleanup. `npm run test:execution` checks the execution Run domain and HTTP boundary using fresh native SQLite fixtures. `npm run test:browser-policy` uses the separately installed Playwright/Chromium package to test the network boundary with controlled loopback servers. `npm run test:integration` runs the synthetic API/MCP and Chromium suites. `npm test` runs all four.
+`npm run test:unit` exercises workspace copying, URL validation, port allocation, command failures, readiness deadlines and server cleanup. `npm run test:execution` checks the execution Run domain and HTTP boundary using fresh native SQLite fixtures, plus the actual isolated Docker workspace backend described in [RUNNER.md](RUNNER.md). The pinned image, local daemon and supported host proc permissions are required; these tests never skip missing isolation prerequisites. `npm run test:browser-policy` uses the separately installed Playwright/Chromium package to test the network boundary with controlled loopback servers. `npm run test:integration` runs the synthetic API/MCP and Chromium suites. `npm test` runs all four.
 
 After `npm run build`, `npm run test:execution:api` separately checks the actual built Worker execution API with fresh temporary D1 state and all migrations. This existing script uses `127.0.0.1:5197`; run it by itself with that port free. It remains separate from the dynamically allocated, parallel-safe integration runner. See [execution Run documentation](EXECUTION.md) for the model and synthetic identity boundary.
 
@@ -45,4 +45,43 @@ The standalone suites consume `TEST_DEV_URL`, `TEST_PREVIEW_URL` and `TEST_ARTIF
 
 Coverage includes anonymous API/MCP denial and discovery; mock-auth spoofing/host/origin/method/prefetch/redirect protections; fresh D1 emptiness; cross-origin writes and invalid records; revision conflicts/history; superseded jobs; idempotent MCP creation and save; exclusive claims and token rejection; stale revision rejection; frozen Run contracts; cross-owner reads/writes; sign-out; browser hydration, capture, Plan/Ticket/Run views, reload persistence and normal/modified brand navigation.
 
-Built preview owner-scoping checks supply trusted **synthetic** Sites identity headers. They exercise the application's ownership boundary after identity has been trusted, and do not establish independent authentication. Independent verified identity remains issue #3. No real accounts, provider keys, production records, successful external callbacks, deployment or execution adapters are exercised. Planning output and Run snapshots do not authorize or prove execution.
+Built preview owner-scoping checks supply trusted **synthetic** Sites identity headers. They exercise the application's ownership boundary after identity has been trusted, and do not establish independent authentication. Independent verified identity remains issue #3. The browser/API suites use no real accounts, provider keys, production records, successful external callbacks or deployment. The separate execution suite exercises real synthetic Docker workloads; it grants no authority to planning output. Planning output and Run snapshots do not authorize or prove execution.
+
+
+## Docker and CI permissions
+
+Before the complete suite, prepare the pinned image and local Docker backend using
+[RUNNER.md](RUNNER.md). Capture requires trusted host access to the owned UID1000
+container's proc root. The tested service UID1000 can access it; Docker socket group
+membership alone does not grant proc access to an unrelated host UID.
+
+CI prepares the local daemon/image explicitly and runs the execution suite through
+its existing trusted `sudo` capability with an empty environment and the selected
+absolute Node binary. This grants proc inspection to the host test supervisor only;
+the guest remains UID1000 with the same Docker restrictions. Frontend unit, browser
+policy and integration checks run as the ordinary CI user. Those four steps together
+cover the same suites as `npm test`, without running Chromium as root. Unsupported
+proc/cgroup/PID topology fails before registered guest execution. CI negotiates only
+Docker API1.41–1.51; Docker28.4.0 is the recorded local validation version.
+
+
+When the pinned Chromium download is unavailable but a trusted local Chromium is
+already installed, select its absolute executable path explicitly:
+
+```sh
+TEST_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:browser-policy
+TEST_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:integration
+```
+
+This only selects the browser binary. The locked Playwright package, mandatory
+proxy, permitted origins and all redirect/WebSocket restrictions are unchanged.
+CI omits the selector and installs Playwright's pinned Chromium. Record the local
+browser version with test evidence when using this portability option.
+
+
+The proxy retains every blocked origin, including a system browser's own background
+software requests. Page/context external request origins are also recorded separately;
+the UI regression keeps its strict font-only assertion against those application
+requests. Background traffic is still blocked and remains visible in evidence. The
+policy suite verifies real forbidden page redirects appear in application tracking
+while the forbidden server receives zero contacts.

@@ -25,6 +25,7 @@ test('redirects cannot escape the two allowed origins', async t => {
     t.diagnostic(`forbidden document redirect requests: ${forbiddenRequests}`);
     assert.equal(forbiddenRequests, 0, 'A forbidden redirect hop reached its server');
     assert.ok(blocked.includes(forbidden.origin), 'Forbidden redirect hop must appear in evidence');
+    assert.ok(restricted.requestedExternal.includes(forbidden.origin), 'Page redirect must remain visible separately from browser background traffic');
     assert.deepEqual(errors, []);
   } finally {
     await restricted?.close();
@@ -52,7 +53,8 @@ test('native allowed redirects preserve document URL, cookies and interactive st
     assert.match(landingCookie, /synthetic_policy=verified/);
     await page.getByRole('button', { name: 'ready', exact: true }).click();
     assert.equal(await page.getByRole('button').innerText(), 'hydrated');
-    assert.deepEqual(restricted.blocked, []);
+    assert.ok(restricted.blocked.every(origin => ![first.origin, second.origin].includes(origin)));
+    assert.deepEqual(restricted.requestedExternal, []);
     assert.deepEqual(restricted.errors, []);
     await restricted.close();
     await assert.rejects(fetch(restricted.proxyOrigin + '/', { signal: AbortSignal.timeout(1000) }));
@@ -75,7 +77,8 @@ test('fetch and popup redirects cannot reach a forbidden origin', async t => {
   });
   const first = await endpoint((request, response) => {
     if (request.url === '/') { response.setHeader('Content-Type', 'text/html'); response.end('<p>local page</p>'); }
-    else { response.writeHead(302, { Location: second.origin + '/forward' }); response.end(); }
+    else if (['/fetch', '/popup'].includes(request.url)) { response.writeHead(302, { Location: second.origin + '/forward' }); response.end(); }
+    else { response.writeHead(204); response.end(); }
   });
   let restricted;
   try {
@@ -218,6 +221,7 @@ test('allowed WebSockets work while off-origin upgrades never reach their server
     }), forbidden.origin.replace('http:', 'ws:') + '/socket');
     assert.equal(forbiddenConnections, 0, 'Off-origin WebSocket bypassed the proxy');
     assert.ok(restricted.blocked.includes(forbidden.origin.replace('http:', 'ws:')));
+    assert.ok(restricted.requestedExternal.includes(forbidden.origin.replace('http:', 'ws:')), 'Forbidden application WebSocket remains in app evidence');
     const workerResults = await page.evaluate(async urls => {
       const connect = url => new Promise((resolve, reject) => {
         const code = `const socket=new WebSocket(${JSON.stringify(url)});socket.onmessage=e=>postMessage(e.data);socket.onerror=()=>postMessage('blocked');socket.onopen=()=>{};`;

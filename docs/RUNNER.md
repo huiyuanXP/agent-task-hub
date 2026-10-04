@@ -12,7 +12,9 @@ Use Linux, Node >=22.13, `/usr/bin/flock`, a local Docker Unix socket at
 `/var/run/docker.sock`, and permission to read the owned container's process root
 through host `/proc`. Docker and the supervisor must share compatible kernel/PID
 visibility. Remote Docker contexts, hidden cgroup identity, host PID namespaces,
-unreadable proc roots and unsupported filesystem layouts fail closed. No privileged
+unreadable proc roots and unsupported filesystem layouts fail closed. The tested
+service UID1000 matches guest UID1000; unrelated service UIDs need independently
+provisioned trusted host proc access. Docker group membership alone is insufficient. No privileged
 helper or extra host mount is used to compensate. Docker 28.4.0 is the tested
 backend. The client negotiates a supported API between 1.41 and 1.51 using the local
 socket; it never reads Docker CLI configuration or endpoint environment variables.
