@@ -22,6 +22,7 @@ export async function GET() {
               ? ideaWithPlanning(r, user.userId)
               : {
                   ...(JSON.parse(r.body) as RecordBody),
+                  ...(r.kind === "run" ? { source: "manual" } : {}),
                   id: r.id,
                   kind: r.kind,
                   revision: r.revision,
@@ -134,6 +135,7 @@ export async function POST(req: Request) {
       return Response.json({ id, revision: revision + 1 });
     }
     if (kind === "run") {
+      body.source = "manual";
       const ticket = await db
         .prepare(
           "SELECT body,revision FROM records WHERE id=? AND owner=? AND kind=?",
