@@ -9,17 +9,19 @@ Built Workers default to Cloudflare Access and reject access when configuration 
 
 The Worker verifies RS256 application JWTs using the team's fixed `/cdn-cgi/access/certs` endpoint. It requires issuer, audience, subject, email, application type, issuance and expiration claims, enforces a maximum 24-hour token lifetime, and checks membership. Assertion, `CF_Authorization` cookie and Bearer transports are accepted; conflicting credentials are rejected. Caller-supplied Sites identity headers are stripped. Identity lives in request-scoped storage shared by UI, API and MCP.
 
-Owners are `access:` plus SHA-256 of the JSON pair `[issuer, subject]`. Email changes preserve the owner; identities from other issuers remain separate. There is no mapping from imported Sites owners. Owner reconciliation and production data migration require their own scope.
+Owners are `access:` plus SHA-256 of the JSON pair `[issuer, subject]`. Email changes preserve the owner; identities from other issuers remain separate. There is no mapping from imported Sites owners. Owner reconciliation and production data migration require their own scope under issue #7.
 
 ## Login and logout
 
 GET `/signin-with-chatgpt?return_to=...` redirects to the configured protected application origin plus a validated local return path. Cloudflare Access ingress owns authentication and its callback; this application does not invent an OIDC callback or use an undocumented provider login query. External, encoded cross-origin and reserved authentication return targets normalize to `/`. The protected hostname must be registered with Access, and alternate Worker routes must be disabled or remain inaccessible. The origin-side verifier still denies requests lacking a valid identity if ingress is bypassed.
 
+The UI displays the verified account name and initials, labels local development identity, and submits logout as a same-origin POST form. It clears rows, planning jobs, drafts, capture text, filters and prior-account identity on 401/403, account switch or the supplied expiry deadline. Expiry invalidates pending refresh results; temporary 503/network failures remain distinguishable and do not claim the identity expired.
+
 GET `/api/session` returns `{user, mode, expiresAt}` with `private, no-store`; expiry is Unix milliseconds or `null` for development/explicit compatibility mode. It never returns tokens or raw provider claims. Missing, expired and revoked credentials return authentication errors (401). Unavailable or malformed provider key responses and D1 failures return 503, so clients can distinguish temporary outages from expired authentication. In configured independent mode anonymous UI navigations redirect to sign-in, while API/MCP calls return 401.
 
 POST `/signout-with-chatgpt` requires an exact same-origin `Origin`. It atomically records the current token's SHA-256 hash and prunes expired tombstones in D1, clears the application cookie with HttpOnly/Secure/SameSite, and redirects to the documented application-domain `/cdn-cgi/access/logout`. The local hash is denied immediately on every subsequent request. Other tokens require provider revocation; Access documents global session logout and 20–30 second upstream propagation. Local tests do not prove upstream revocation. GET and prefetch requests cannot revoke tokens.
 
-Unsafe browser requests require the configured Origin and reject cross-site fetch metadata. Explicit verified Bearer calls without any cookies may omit Origin; a matching Access assertion is compatible with this transport. Any Cookie header restores the Origin requirement. Records/planning routes retain their stricter mandatory Origin checks. Authentication establishes account access only; execution approval and backend authority remain separately enforced.
+Unsafe browser requests require the configured Origin and reject cross-site fetch metadata. Explicit verified Bearer calls without any cookies may omit Origin; a matching Access assertion is compatible with this transport. Any Cookie header restores the Origin requirement. Records/planning routes retain their stricter mandatory Origin checks. A SourceMember receives a private owner partition, not collaborative sharing or a backend capability. Authentication establishes account access only; execution approval and backend authority remain separately enforced.
 
 ## Local and legacy compatibility
 
@@ -30,6 +32,8 @@ Portable development uses the existing loopback mock middleware and identifies s
 ## Verification boundary and sources
 
 `npm run test:auth` verifies the pure token policy. `npm run test:auth:api` builds and runs the actual Vinext Worker in Miniflare with a fresh D1 database, all migrations, ephemeral synthetic RSA keys, and only a synthetic team JWKS outbound response. It covers spoofed headers, two concurrent owners, protected API/UI/MCP/Run/authorization calls, session expiry, Origin checks, safe redirects, logout replay, storage failure, provider outage and explicit compatibility modes. No real tenant, provider signing key, production data, webhook or execution backend is contacted.
+
+`npm run test:auth:browser` exercises the actual built session UI through a test-only loopback ingress and the existing network proxy, with ephemeral signed JWTs, isolated D1 and synthetic JWKS. It verifies private-state clearing, account switching, scheduled expiry/delayed refresh, temporary outage handling, navigation and POST logout replay denial. Run after building; `npm test` includes it. See [TESTING.md](TESTING.md).
 
 The sign-in redirect tests establish local URL construction, **not live SSO**. Provider registration, protected-hostname setup and operational validation remain separately authorized work under issue #5.
 

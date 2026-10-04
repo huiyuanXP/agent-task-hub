@@ -14,9 +14,9 @@ npm test
 
 On machines where Chromium's system libraries are already available, `npx --prefix tests/browser playwright install chromium` is sufficient. The application lockfile does not include browser tooling and must not be regenerated to install it.
 
-`npm run test:unit` exercises workspace copying, URL validation, port allocation, command failures, readiness deadlines and server cleanup. `npm run test:execution` checks the execution Run domain and HTTP boundary using fresh native SQLite fixtures. `npm run test:browser-policy` uses the separately installed Playwright/Chromium package to test the network boundary with controlled loopback servers. `npm run test:integration` runs the synthetic API/MCP and Chromium suites. `npm test` runs all four.
+`npm run test:unit` exercises workspace copying, URL validation, port allocation, command failures, readiness deadlines and server cleanup. `npm run test:execution` checks the execution Run domain and HTTP boundary using fresh native SQLite fixtures. `npm run test:browser-policy` uses the separately installed Playwright/Chromium package to test the network boundary with controlled loopback servers. `npm run test:integration` runs the synthetic API/MCP and Chromium suites. `npm test` also runs the pure authentication verifier, actual independent Worker API and independent browser acceptance suites.
 
-After `npm run build`, `npm run test:execution:api` separately checks the actual built Worker execution API with fresh temporary D1 state and all migrations. This existing script uses `127.0.0.1:5197`; run it by itself with that port free. It remains separate from the dynamically allocated, parallel-safe integration runner. See [execution Run documentation](EXECUTION.md) for the model and synthetic identity boundary.
+After `npm run build`, `npm run test:execution:api` separately checks the actual built Worker execution API with fresh temporary D1 state and all migrations. It binds a dynamically assigned loopback port and remains separate from the integration runner. Do not rebuild `dist` while any standalone built-Worker suite is using it. See [execution Run documentation](EXECUTION.md) for the model and synthetic identity boundary.
 
 Every integration invocation copies an allowlist of application inputs to a new `agent-task-hub-test-*` directory under the OS temporary directory. It installs and builds there, applies all SQL migrations in sorted order once to a fresh local `.wrangler/state`, and starts portable development and built Worker preview on independently allocated `127.0.0.1` ports. It does not use the checkout's execution profile, dependencies, compiled output, D1 state, environment files, credentials or symlinks. The non-secret `.env.example` is permitted. Child processes receive a limited tooling environment; provider credential variables are omitted.
 
@@ -45,4 +45,34 @@ The standalone suites consume `TEST_DEV_URL`, `TEST_PREVIEW_URL` and `TEST_ARTIF
 
 Coverage includes anonymous API/MCP denial and discovery; mock-auth spoofing/host/origin/method/prefetch/redirect protections; fresh D1 emptiness; cross-origin writes and invalid records; revision conflicts/history; superseded jobs; idempotent MCP creation and save; exclusive claims and token rejection; stale revision rejection; frozen Run contracts; cross-owner reads/writes; sign-out; browser hydration, capture, Plan/Ticket/Run views, reload persistence and normal/modified brand navigation.
 
-Built preview owner-scoping checks supply trusted **synthetic** Sites identity headers. They exercise the application's ownership boundary after identity has been trusted, and do not establish independent authentication. Independent verified identity remains issue #3. No real accounts, provider keys, production records, successful external callbacks, deployment or execution adapters are exercised. Planning output and Run snapshots do not authorize or prove execution.
+Built preview owner-scoping checks supply trusted **synthetic** Sites identity headers. They exercise the application's ownership boundary after identity has been trusted, and do not establish independent authentication. Independent verified identity has its own suites below. No real accounts, provider keys, production records, successful external callbacks, deployment or execution adapters are exercised. Planning output and Run snapshots do not authorize or prove execution.
+
+## Independent identity acceptance
+
+`npm run test:auth` runs real JOSE-signed ephemeral token and policy tests.
+`npm run test:auth:api` builds, then checks the actual Worker with fresh temporary
+D1 and every committed migration once. `npm run test:auth:browser` uses that built
+artifact and the separately locked Playwright install. Run these sequentially;
+`npm test` already does so. Standalone execution authorization acceptance is:
+
+```sh
+EXECUTION_PLAYWRIGHT_MODULE=./tests/browser/node_modules/playwright/index.mjs node --experimental-strip-types tests/execution/authorization-worker.mjs
+```
+
+The independent browser fixture uses a clearly test-only loopback ingress facade
+to translate browser requests to the configured synthetic HTTPS app origin. It
+supplies newly signed assertions, while the actual Worker verifies JWTs against
+an ephemeral synthetic JWKS. Session/data responses are never mocked. Native
+browser traffic still crosses the existing restrictive network proxy; only the
+facade origin is permitted. The provider-owned logout destination terminates at
+the fixture, and the suite separately verifies actual local token replay denial.
+No provider registration, DNS lookup, real credential, production data, live SSO
+or upstream logout propagation is involved.
+
+Checks cover verified display/initials, development label and POST logout,
+account switching, real nonmember denial, data origin rejection, storage 503,
+expiry without a refresh, delayed successful refresh after expiry and normal/
+modified home navigation. Existing integration covers capture, planning,
+history, filters and frozen Run views; standalone authorization covers the
+persisted decision panel. Fixtures close their own browser, proxy, ingress and
+Worker and remove temporary D1 on both success and failure.

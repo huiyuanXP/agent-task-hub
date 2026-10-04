@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import type { Row, RecordDraft, PlanningState, JobRow } from "../lib/types";
+import type { Row, RecordDraft, PlanningState, JobRow, SessionState } from "../lib/types";
 import {
   Lightbulb,
   Inbox,
@@ -100,15 +100,65 @@ export default function Home() {
       jobs: [],
       subscriptions: 0,
     });
+  const [session, setSession] = useState<SessionState | null>(null);
+  const sessionRef = useRef<SessionState | null>(null);
+  const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const identityVersion = useRef(0);
   const loadSequence = useRef(0);
-  async function load(silent = false) {
+  const clearPrivateState = useCallback(() => {
+    identityVersion.current++;
+    setRows([]);
+    setPlanning({ jobs: [], subscriptions: 0 });
+    setDraft(null);
+    setCapture("");
+    setCaptureProject("通用");
+    setQuery("");
+    setProject("全部项目");
+    setStateFilter("all");
+    setView("inbox");
+    setList(false);
+    setNotice("");
+    setSaving(false);
+  }, []);
+  const expireSession = useCallback(() => {
+    ++loadSequence.current;
+    if (expiryTimer.current) clearTimeout(expiryTimer.current);
+    sessionRef.current = null;
+    setSession(null);
+    clearPrivateState();
+    setLoading(false);
+    setError("登录已失效或无权访问，请重新登录");
+  }, [clearPrivateState]);
+  const authenticationDenied = useCallback((response: Response) => {
+    if (response.status !== 401 && response.status !== 403) return false;
+    expireSession();
+    return true;
+  }, [expireSession]);
+  const load = useCallback(async (silent = false) => {
     const seq = ++loadSequence.current;
     if (!silent) setLoading(true);
     try {
+      const sr = await fetch("/api/session", { cache: "no-store" });
+      if (seq !== loadSequence.current) return;
+      if (authenticationDenied(sr)) return;
+      if (!sr.ok) throw Error("账户服务暂时不可用，请稍后重试");
+      const next = (await sr.json()) as SessionState;
+      if (seq !== loadSequence.current) return;
+      if (next.expiresAt !== null && next.expiresAt <= Date.now()) {
+        expireSession();
+        return;
+      }
+      if (sessionRef.current?.user.userId !== next.user.userId) clearPrivateState();
+      sessionRef.current = next;
+      setSession(next);
+      if (expiryTimer.current) clearTimeout(expiryTimer.current);
+      expiryTimer.current = next.expiresAt === null ? null : setTimeout(expireSession, next.expiresAt - Date.now());
       const [r, pr] = await Promise.all([
         fetch("/api/records", { cache: "no-store" }),
         fetch("/api/planning", { cache: "no-store" }),
       ]);
+      if (seq !== loadSequence.current) return;
+      if (authenticationDenied(r) || authenticationDenied(pr)) return;
       const d = (await r.json()) as { records: Row[]; error?: string },
         pd = (await pr.json()) as PlanningState;
       if (!r.ok) throw Error(d.error);
@@ -124,8 +174,9 @@ export default function Home() {
     } finally {
       if (seq === loadSequence.current) setLoading(false);
     }
-  }
+  }, [authenticationDenied, clearPrivateState, expireSession]);
   useEffect(() => {
+    const sequence = loadSequence;
     const startup = window.setTimeout(() => {
       void load();
     }, 0);
@@ -137,13 +188,15 @@ export default function Home() {
     window.addEventListener("online", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
+      ++sequence.current;
+      if (expiryTimer.current) clearTimeout(expiryTimer.current);
       window.clearTimeout(startup);
       window.clearInterval(timer);
       window.removeEventListener("focus", refresh);
       window.removeEventListener("online", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, []);
+  }, [load]);
   function openPlan(idea: Row) {
     const plan =
       rows.find((r) => r.kind === "plan" && r.id === idea.planId) ||
@@ -158,6 +211,7 @@ export default function Home() {
     }
   }
   async function save(value: RecordDraft) {
+    const version = identityVersion.current;
     setSaving(true);
     setError("");
     try {
@@ -166,21 +220,24 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(value),
       });
+      if (version !== identityVersion.current || authenticationDenied(r)) return null;
       const d = (await r.json()) as {
         id: string;
         revision: number;
         error?: string;
       };
       if (!r.ok) throw Error(d.error);
+      if (version !== identityVersion.current) return null;
       await load();
+      if (version !== identityVersion.current) return null;
       setNotice("已保存到云端");
       setTimeout(() => setNotice(""), 3500);
       return d;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "保存失败，内容已保留");
+      if (version === identityVersion.current) setError(e instanceof Error ? e.message : "保存失败，内容已保留");
       return null;
     } finally {
-      setSaving(false);
+      if (version === identityVersion.current) setSaving(false);
     }
   }
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -199,6 +256,7 @@ export default function Home() {
     if (d) setCapture("");
   }
   async function requestPlan(idea: Row) {
+    const version = identityVersion.current;
     setSaving(true);
     try {
       const r = await fetch("/api/planning", {
@@ -206,12 +264,15 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ideaId: idea.id }),
       });
+      if (version !== identityVersion.current || authenticationDenied(r)) return;
       const d = (await r.json()) as {
         job: Pick<JobRow, "status" | "delivery">;
         error?: string;
       };
       if (!r.ok) throw Error(d.error);
+      if (version !== identityVersion.current) return;
       await load();
+      if (version !== identityVersion.current) return;
       setNotice(
         d.job.status === "done"
           ? "这条点子已经规划完成，可以查看 Plan 和 Tickets"
@@ -225,9 +286,9 @@ export default function Home() {
       );
       setTimeout(() => setNotice(""), 6000);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "请求失败");
+      if (version === identityVersion.current) setError(e instanceof Error ? e.message : "请求失败");
     } finally {
-      setSaving(false);
+      if (version === identityVersion.current) setSaving(false);
     }
   }
   function createPlan(idea: Row) {
@@ -348,7 +409,9 @@ export default function Home() {
         <Link
           className="brand"
           href="/"
-          onNavigate={() => {
+          onNavigate={(event) => {
+            // Home is already mounted; reset its workspace without an RSC navigation.
+            event.preventDefault();
             setView("inbox");
             setQuery("");
             setProject("全部项目");
@@ -446,7 +509,20 @@ export default function Home() {
             >
               <RefreshCw size={17} className={loading ? "spin" : ""} />
             </button>
-            <span className="avatar small">W</span>
+            {session ? (
+              <>
+                <span aria-label="当前账户">
+                  <span>{session.user.displayName}</span>
+                  {session.mode === "development" && <small> · 本地开发身份</small>}
+                </span>
+                <span className="avatar small" aria-label="账户缩写">
+                  {session.user.displayName.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join("").toUpperCase()}
+                </span>
+                <form method="post" action="/signout-with-chatgpt">
+                  <button type="submit">退出登录</button>
+                </form>
+              </>
+            ) : !loading && <a href="/signin-with-chatgpt?return_to=%2F">登录</a>}
           </div>
         </header>
         <main>
@@ -768,7 +844,7 @@ export default function Home() {
                   ))}
                 </div>
               )}
-              {view === "board" && <AuthorizationPanel tickets={tickets} />}
+              {view === "board" && <AuthorizationPanel key={session?.user.userId ?? "anonymous"} tickets={tickets} />}
               {view === "board" && (
                 <div className={"board " + (list ? "as-list" : "")}>
                   {Object.entries(statuses)

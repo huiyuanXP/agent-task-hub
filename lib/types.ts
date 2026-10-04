@@ -150,3 +150,10 @@ export interface JsonSchema {
   maxItems?: number;
   description?: string;
 }
+
+// Safe session DTO; display data never grants execution authority.
+export interface SessionState {
+  user: { userId: string; displayName: string; email: string; fullName: string | null };
+  mode: "access" | "trusted-sites" | "development";
+  expiresAt: number | null;
+}
