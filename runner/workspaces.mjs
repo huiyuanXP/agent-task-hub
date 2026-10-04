@@ -242,7 +242,9 @@ export function recoverWorkspaces(root) {
     for (const id of await disk.records(root)) {
       try { states.push(await disk.load(root, key, id)); } catch (error) {
         if (error.code !== 'ENOENT') throw error;
-        // Creation persists metadata before Docker mutations; only an empty reservation is removable.
+        // No Docker mutation precedes initial metadata. Admission serialization
+        // excludes its writer; established-workspace temps stay under their lock.
+        await disk.cleanReservationTemps(join(root, id));
         await rmdir(join(root, id)); await disk.syncDirectory(root);
       }
     }

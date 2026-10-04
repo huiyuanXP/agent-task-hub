@@ -99,7 +99,10 @@ final evidence assertions. Application requests to the debugger port remain deni
 by the mandatory proxy. No user-provided debugger URLs, flags or launch options are
 accepted. The policy suite verifies worker-only forbidden WebSockets appear as
 `ws:` application origins, fail the strict font-only allowlist, and make zero
-forbidden contacts; it also covers actual wildcard-listener rejection.
+forbidden contacts; it also covers wildcard/non-loopback rejection using controlled
+proc-table rows.
+No wildcard listener is opened by the tests; actual debugger listeners are verified
+on loopback, and application access to their ports remains denied.
 
 The managed host build can print `WARNING Proxy environment variables detected.
 We'll use your proxy for fetch requests.` This is expected host package/build

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { chromium } from './node_modules/playwright/index.mjs';
-import { localDebuggerEndpoint } from './worker-network.mjs';
+import * as workerNetwork from './worker-network.mjs';
 import { launchRestrictedBrowser } from './network.mjs';
 
 async function endpoint(handler) {
@@ -303,10 +303,16 @@ test('the application cannot reach the trusted loopback debugger listener', asyn
 });
 
 
-test('debugger discovery rejects a wildcard listener even when it advertises loopback', async () => {
-  let contacted=0;
-  const server=createServer((_,response)=>{contacted++;response.end('{}')});
-  await new Promise(resolve=>server.listen(0,'0.0.0.0',resolve));
-  try {await assert.rejects(localDebuggerEndpoint(server.address().port),/only on loopback/);assert.equal(contacted,0)}
-  finally {await new Promise(resolve=>server.close(resolve))}
+test('debugger binding tables reject wildcard and nonloopback listeners without opening them', () => {
+  assert.equal(typeof workerNetwork.validateDebuggerBindings,'function','controlled binding verifier seam is missing');
+  const port=12345, hex=port.toString(16).toUpperCase().padStart(4,'0');
+  const row=(address,state='0A',suffix=hex)=>` 0: ${address}:${suffix} 00000000:0000 ${state} 0 0 0`;
+  const table=(...rows)=>'sl local_address rem_address st\n'+rows.join('\n')+'\n';
+  for(const address of ['0100007F','00000000000000000000000001000000'])assert.doesNotThrow(()=>workerNetwork.validateDebuggerBindings([table(row(address))],port));
+  for(const address of ['00000000','00000000000000000000000000000000','0100000A','000080FE000000000000000001000000']){
+    assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F')),table(row(address))],port),/only on loopback/);
+  }
+  assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F','01'))],port),/only on loopback/);
+  assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F','0A','FFFF'))],port),/only on loopback/);
+  assert.doesNotThrow(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F'),row('00000000','0A','FFFF'))],port));
 });

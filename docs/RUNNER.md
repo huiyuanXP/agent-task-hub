@@ -117,9 +117,17 @@ resolve, preventing implicit volume recreation. Lost requests that never resolve
 retain capacity and a cleanup obligation, rather than permitting a duplicate run.
 
 `recoverWorkspaces(root)` reaps every owned incomplete workspace, rearms missing
-setup guardians for uncertainty, removes empty reservations left before metadata,
+setup guardians for uncertainty, removes pre-metadata reservations containing only
+validated private interrupted-write temporary files (or no files),
 and returns current durable states. It performs cleanup only. A missing exact-ID
 watchdog blocks execution/capture; recovery removes that runtime.
+
+Interrupted first-write recovery holds admission serialization, pins the private
+reservation directory without following links, confirms metadata is absent, and
+validates every entry before deleting any. Only recognized `.tmp-<pid>-<hex>`
+regular files with private ownership/mode, one link and bounded size are removable.
+Unexpected entries and ownership/type anomalies preserve the reservation and fail
+closed. Established-workspace temporary writes remain protected by their own lock.
 
 ## Artifact capture
 

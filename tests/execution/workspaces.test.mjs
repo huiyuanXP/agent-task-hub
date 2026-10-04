@@ -102,13 +102,42 @@ test('retention capacity preserves tombstones and refuses the next identity',asy
  await assert.rejects(api.startWorkspace(first),/state|final/);
 });
 
-test('recovery removes a pre-metadata reservation crash without blocking other owned cleanup',async t=>{
- const root=await mkdtemp('/tmp/ath-reservation-');t.after(()=>rm(root,{recursive:true,force:true}));
+test('recovery removes interrupted first-write metadata and continues other owned cleanup',async t=>{
+ const root=await mkdtemp('/tmp/ath-reservation-');
+ const orphan=root+'/state/ath-'+'a'.repeat(40), empty=root+'/state/ath-'+'b'.repeat(40);
+ t.after(async()=>{await rm(orphan,{recursive:true,force:true});await rm(empty,{recursive:true,force:true});await cleanupFixture(root)});
  const w=await api.createWorkspace(root+'/state',{owner:'reservation',runId:root,attempt:1},{});
- const orphan='ath-'+'a'.repeat(40);await mkdir(root+'/state/'+orphan,{mode:0o700});
+ await mkdir(root+'/source/input',{recursive:true});await writeFile(root+'/source/input/a','{}');
+ await api.importInputs(w,root+'/source',[manifest('input/a','{}')]);
+ const owned=await api.inspectWorkspace(w);
+ await mkdir(empty,{mode:0o700});await mkdir(orphan,{mode:0o700});await writeFile(orphan+'/.tmp-123-0123456789abcdef','{"payload":',{mode:0o600});
  const recovered=await api.recoverWorkspaces(root+'/state');assert.equal(recovered.length,1);assert.equal(recovered[0].state,'removed');
- const {access}=await import('node:fs/promises');await assert.rejects(access(root+'/state/'+orphan),{code:'ENOENT'});
+ const {access}=await import('node:fs/promises');await assert.rejects(access(orphan),{code:'ENOENT'});await assert.rejects(access(empty),{code:'ENOENT'});
  assert.equal((await api.inspectWorkspace(w)).state,'removed');
+ const docker=await import('../../runner/docker.mjs');assert.equal(await docker.inspectVolume(owned.volumeName),null);
+});
+
+for(const anomaly of ['unexpected file','temporary directory','temporary symlink','temporary hardlink','public temporary file','public reservation','symlink reservation'])test(`missing-metadata recovery preserves ${anomaly}`,async t=>{
+ const root=await mkdtemp('/tmp/ath-reservation-guard-');
+ const w=await api.createWorkspace(root+'/state',{owner:'reservation-guard',runId:root,attempt:1});
+ const orphan=root+'/state/ath-'+'a'.repeat(40), temp=orphan+'/.tmp-123-0123456789abcdef';
+ t.after(async()=>{await rm(orphan,{recursive:true,force:true});await cleanupFixture(root)});
+ const {chmod,lstat}=await import('node:fs/promises');
+ await mkdir(orphan,{mode:0o700});
+ await writeFile(temp,'partial',{mode:0o600});
+ if(anomaly==='unexpected file')await writeFile(orphan+'/keep','unexpected',{mode:0o600});
+ if(anomaly==='temporary directory'){await rm(temp);await mkdir(temp,{mode:0o700})}
+ if(anomaly==='temporary symlink'){await rm(temp);await writeFile(root+'/target','retained',{mode:0o600});await symlink(root+'/target',temp)}
+ if(anomaly==='temporary hardlink'){await writeFile(root+'/target','retained',{mode:0o600});await rm(temp);await link(root+'/target',temp)}
+ if(anomaly==='public temporary file')await chmod(temp,0o644);
+ if(anomaly==='public reservation')await chmod(orphan,0o755);
+ if(anomaly==='symlink reservation'){await rm(orphan,{recursive:true});await mkdir(root+'/target',{mode:0o700});await symlink(root+'/target',orphan)}
+ await assert.rejects(api.recoverWorkspaces(root+'/state'),{message:/^(Unsafe|Unexpected) /});
+ assert.ok(await lstat(orphan));
+ if(anomaly!=='symlink reservation')assert.ok(await lstat(temp),'recognized partial metadata must also survive unsafe reservation');
+ if(anomaly==='unexpected file')assert.equal(await readFile(orphan+'/keep','utf8'),'unexpected');
+ if(['temporary symlink','temporary hardlink'].includes(anomaly))assert.equal(await readFile(root+'/target','utf8'),'retained');
+ assert.notEqual((await api.inspectWorkspace(w)).state,undefined);
 });
 
 test('atomic metadata readers keep valid pinned snapshots while rename retires the old inode',async t=>{

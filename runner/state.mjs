@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, readdir, lstat, realpath, rm } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, readdir, opendir, lstat, realpath, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -106,6 +106,28 @@ export async function records(root) {
 }
 export async function cleanTemps(root) {
   for (const entry of await readdir(root)) if (/^\.tmp-[0-9]+-[a-f0-9]{16}$/.test(entry)) await rm(join(root, entry));
+}
+/** Called only under admission serialization after metadata was found absent.
+ * Unlike established-workspace cleanup, every entry must be a private regular
+ * interrupted-write file; validate the whole reservation before deleting any. */
+export async function cleanReservationTemps(directory) {
+  const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw Error('Unsafe reservation directory');
+    const pinned = `/proc/self/fd/${handle.fd}`;
+    try { await lstat(join(pinned, 'metadata.json')); throw Error('Unexpected reservation metadata'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const names = [];
+    const entries = await opendir(pinned);
+    for await (const entry of entries) {
+      if (names.length >= MAX_WORKSPACES * 2 + 8 || !/^\.tmp-[0-9]+-[a-f0-9]{16}$/.test(entry.name)) throw Error('Unexpected reservation entry or capacity');
+      const file = await lstat(join(pinned, entry.name));
+      if (!file.isFile() || file.nlink !== 1 || file.uid !== process.getuid() || (file.mode & 0o077) || file.size > 2097152) throw Error('Unsafe reservation temporary file');
+      names.push(entry.name);
+    }
+    for (const name of names) await rm(join(pinned, name));
+  } finally { await handle.close(); }
 }
 export async function processIdentity(pid) {
   try { const value = await readFile(`/proc/${pid}/stat`, 'utf8'); const fields = value.slice(value.lastIndexOf(')') + 2).split(' '); return fields[0] === 'Z' ? null : fields[19]; } catch { return null; }

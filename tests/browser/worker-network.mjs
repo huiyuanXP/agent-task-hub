@@ -1,13 +1,19 @@
 import { readFile } from 'node:fs/promises';
 
+/** Pure proc-table validation; tests supply controlled rows without binding an
+ * unsafe address. Production always supplies actual Linux proc tables below. */
+export function validateDebuggerBindings(tables, port) {
+  const rows = tables.flatMap(text => text.trim().split('\n').slice(1));
+  const listeners = rows.map(row => row.trim().split(/\s+/)).filter(fields => fields[3] === '0A' && parseInt(fields[1].split(':')[1], 16) === port);
+  if (!listeners.length || listeners.some(fields => !['0100007F', '00000000000000000000000001000000'].includes(fields[1].split(':')[0]))) throw Error('Chromium debugger must listen only on loopback');
+}
+
 /** Verify the generated Chromium listener before trusting its public CDP URL. */
 export async function localDebuggerEndpoint(port) {
   let tables;
   try { tables = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map(path => readFile(path, 'utf8'))); }
   catch (cause) { throw Error('Browser worker observation requires readable Linux /proc/net/tcp and tcp6', {cause}); }
-  const rows = tables.flatMap(text => text.trim().split('\n').slice(1));
-  const listeners = rows.map(row => row.trim().split(/\s+/)).filter(fields => fields[3] === '0A' && parseInt(fields[1].split(':')[1], 16) === port);
-  if (!listeners.length || listeners.some(fields => !['0100007F', '00000000000000000000000001000000'].includes(fields[1].split(':')[0]))) throw Error('Chromium debugger must listen only on loopback');
+  validateDebuggerBindings(tables, port);
   const response = await fetch(`http://127.0.0.1:${port}/json/version`, { redirect: 'error', signal: AbortSignal.timeout(3000) });
   if (!response.ok) throw Error('Chromium debugger endpoint unavailable');
   const reader = response.body.getReader();
