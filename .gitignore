@@ -24,3 +24,6 @@ npm-debug.log*
 # Private local execution metadata, ownership keys and retained evidence.
 .runner-state/
 .runner-tests/
+.worktrees/
+.superpowers/
+test-results/
