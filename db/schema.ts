@@ -27,3 +27,30 @@ export const executionRuns = sqliteTable('execution_runs', {
   check('execution_runs_evidence', sql`${t.evidence} IS NULL OR (length(${t.evidence}) <= 16000 AND json_valid(${t.evidence}))`),
   check('execution_runs_success', sql`(${t.state} = 'succeeded' AND ${t.evidence} IS NOT NULL) OR (${t.state} <> 'succeeded' AND ${t.evidence} IS NULL)`),
 ]);
+
+export const executionAuthorizations = sqliteTable('execution_authorizations', {
+  id: text('id').primaryKey().notNull(), owner: text('owner').notNull(), actor: text('actor').notNull(),
+  runId: text('run_id').notNull(), ticketId: text('ticket_id').notNull(), ticketRevision: integer('ticket_revision').notNull(),
+  scope: text('scope').notNull(), budget: text('budget').notNull(), operations: text('operations').notNull(),
+  expiresAt: integer('expires_at').notNull(), status: text('status').notNull().default('pending'),
+  requestId: text('request_id').notNull(), inputKey: text('input_key').notNull(),
+  createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+  lastDecisionId: text('last_decision_id').notNull(), lastActor: text('last_actor').notNull(), decisionKey: text('decision_key').notNull(),
+}, t => [
+  uniqueIndex('authorizations_owner_request').on(t.owner, t.requestId),
+  uniqueIndex('authorizations_run').on(t.runId),
+  check('authorizations_scope', sql`json_valid(${t.scope}) AND json_type(${t.scope}) = 'array' AND json_array_length(${t.scope}) = 1`),
+  check('authorizations_budget', sql`json_valid(${t.budget}) AND json_type(${t.budget}) = 'object'`),
+  check('authorizations_operations', sql`json_valid(${t.operations}) AND json_type(${t.operations}) = 'array' AND json_array_length(${t.operations}) = 1`),
+  check('authorizations_status', sql`${t.status} IN ('pending','approved','rejected','revoked')`),
+  check('authorizations_expiry', sql`${t.expiresAt} > ${t.createdAt}`),
+]);
+export const authorizationAudit = sqliteTable('authorization_audit', {
+  decisionId: text('decision_id').notNull(), owner: text('owner').notNull(), actor: text('actor').notNull(),
+  kind: text('kind').notNull(), authorizationId: text('authorization_id').notNull(), runId: text('run_id').notNull(),
+  at: integer('at').notNull(), scope: text('scope').notNull(), budget: text('budget').notNull(), decisionKey: text('decision_key').notNull(),
+}, t => [
+  uniqueIndex('authorization_audit_owner_decision').on(t.owner, t.decisionId),
+  index('authorization_audit_grant').on(t.owner, t.authorizationId, t.at),
+  check('authorization_audit_kind', sql`${t.kind} IN ('requested','approved','rejected','revoked')`),
+]);

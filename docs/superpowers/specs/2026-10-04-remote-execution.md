@@ -118,6 +118,53 @@ produce succeeded. Bound evidence sizes and validate it server-side. Supply
 complete protocol tests and a working consumer CLI with connection, claim,
 renewal, progress, completion and shutdown handling.
 
+## Cross-service decisions
+
+- Authorization is an owner decision, not a capability conveyed by a worker
+  lease. Worker names are labels; possession of an unexpired generation-bound
+  lease permits only its documented execution actions, never grant decisions.
+  Domain methods snapshot caller inputs before asynchronous work.
+- Supply an actual server catalog during authorization, rather than asking
+  users to invent operation hashes. The initial backend supports one registered
+  operation per Run: a fixed Node command that reads the frozen Ticket input,
+  validates it and writes a declared JSON artifact. Define its real argv and
+  pinned image now, in a shared Worker-safe descriptor module. Its definition
+  hash covers fixed argv, image, exact input path/hash manifest, artifact paths
+  and policy. The supervisor later consumes this same descriptor; client
+  commands and arbitrary operation hashes are never authority. Registry
+  extensibility must preserve exact descriptor validation and bounded policy.
+- Grants have a latest-start expiry. A dispatch permit persists an execution
+  deadline no later than that expiry or start plus approved timeout. Lease
+  expiry controls caller credentials, independently of the persisted execution
+  deadline. Never extend a started permit's deadline during recovery. A genuine
+  signed historical result ending before its deadline can be reconciled by a
+  fresh authorized lease/owner; an expired lease cannot write it.
+- Backend identity is deterministic for owner/Run/attempt, independent of
+  request retries and lease generations. Persist journal transitions and exact
+  envelope before create/start, using atomic fsynced writes and a single-instance
+  lock. Recover every crash boundary without repeating an uncertain started
+  execution. Retain terminal receipts/tombstones after workspace cleanup.
+- Result transport is asynchronous: start returns a durable identity, result
+  is polled, and leases renew concurrently. Persist consumer request IDs before
+  network writes so response loss does not mint a different execution. Shutdown
+  requests cancellation and waits for confirmed stop or the hard deadline.
+- Freeze all container processes before collecting artifacts while tmpfs is
+  alive. Inspect declared path prefixes through the Docker daemon, rejecting
+  links, hard links, special files and path escape, then copy bounded regular
+  bytes from that quiescent snapshot. Hash exactly the retained bytes. Bound
+  artifact count, individual/total bytes and host stream retention; no generic
+  untrusted archive extraction and no unpaused validation/copy race.
+- Transport and evidence have different keys and explicit version/purpose,
+  audience and key IDs. Canonical JSON and P-256 raw 64-byte signatures must
+  interoperate between Node and Worker. Preserve the evidence key and key ID
+  outside guest access across restarts. Evidence binds the durable dispatch
+  permit and exact operation definition as well as the Run contract. Configured
+  public verifier keys, never caller keys, determine trust.
+- Cancellation intent and physically confirmed container stop are distinct.
+  Revocation prevents new dispatch permits/renewals, requests bounded in-flight
+  cancellation, and cannot retroactively turn an absorbing cancelled Run into
+  success. Backend results remain available for truthful reconciliation.
+
 ## Quality and verification
 
 Node >=22.13.0, preserve application lockfile. Use native node:test and real

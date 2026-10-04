@@ -5,7 +5,11 @@ export interface ExecutionStatement {
   all<T>(): Promise<{ results: T[] }>;
   run(): Promise<{ meta: { changes: number } }>;
 }
-export interface ExecutionDatabase { prepare(sql: string): ExecutionStatement }
+export interface ExecutionDatabase {
+  prepare(sql: string): ExecutionStatement;
+  /** D1 executes the complete batch in one transaction, rolling back on error. */
+  batch(statements: ExecutionStatement[]): Promise<{ meta: { changes: number } }[]>;
+}
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';
 export interface EvidenceArtifact { path: string; sha256: string; bytes: number }
 /** Versioned, fixed-order signing contract. Transport authentication uses another key. */
