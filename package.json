@@ -17,7 +17,8 @@
     "test": "npm run test:unit && npm run test:execution && npm run test:browser-policy && npm run test:integration",
     "test:browser-policy": "node --test tests/browser/*.test.mjs",
     "test:execution": "node --experimental-strip-types --test tests/execution/*.test.mjs",
-    "test:execution:api": "node --experimental-strip-types tests/execution/worker-api.mjs"
+    "test:execution:api": "node --experimental-strip-types tests/execution/worker-api.mjs",
+    "test:auth": "node --experimental-strip-types --test tests/auth/*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -30,6 +31,7 @@
     "drizzle-orm": "0.45.2",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
+    "jose": "6.2.12",
     "lucide-react": "^1.31.0",
     "next": "16.3.4",
     "next-themes": "^0.4.6",
