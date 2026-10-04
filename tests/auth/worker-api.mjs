@@ -29,7 +29,10 @@ async function start(bindings = settings) {
     outboundService: async request => {
       outbound++;
       if (request.url !== issuer + '/cdn-cgi/access/certs') { unexpectedOutbound.push(request.url); return new Response('Denied', { status: 403 }); }
-      return outage ? new Response('Unavailable', { status: 503 }) : Response.json({ keys: [jwk] });
+      if (outage === 'malformed') return new Response('not-json');
+      if (outage === 'invalid-keys') return Response.json({ keys: 'invalid' });
+      if (outage === 'timeout') await new Promise(resolve => setTimeout(resolve, 6000));
+      return outage === true ? new Response('Unavailable', { status: 503 }) : Response.json({ keys: [jwk] });
     },
   });
   await worker.ready; db = await worker.getD1Database('DB');
@@ -135,7 +138,13 @@ try {
   await expect(401, '/api/session', { jwt: short });
   console.log('PASS: verified owner isolation, protected API/UI/MCP/Run/authorization, session, CSRF, redirects and immediate logout revocation');
   // Fresh isolate removes the JWKS cache, modeling first-contact provider outage.
-  outage = true; await start(); await expect(401, '/api/session', { jwt: bob }); outage = false;
+  for (const unavailable of [true, 'malformed', 'invalid-keys', 'timeout']) {
+    outage = unavailable; await start();
+    const response = await expect(503, '/api/session', { jwt: bob });
+    assert.deepEqual(response.json, { error: 'Authentication unavailable' });
+    assert.match(response.headers.get('cache-control'), /no-store/);
+  }
+  outage = false;
   await start({}); await expect(503, '/api/records', { jwt: null, headers: spoof });
   await start({ AUTH_TRUST_SITES_HEADERS: '1' }); await expect(503, '/api/records', { jwt: null, headers: spoof });
   await start({ AUTH_MODE: 'trusted-sites' }); await expect(503, '/api/records', { jwt: null, headers: spoof });
