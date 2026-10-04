@@ -153,12 +153,15 @@ export default function Home() {
       setSession(next);
       if (expiryTimer.current) clearTimeout(expiryTimer.current);
       expiryTimer.current = next.expiresAt === null ? null : setTimeout(expireSession, next.expiresAt - Date.now());
-      const [r, pr] = await Promise.all([
-        fetch("/api/records", { cache: "no-store" }),
-        fetch("/api/planning", { cache: "no-store" }),
-      ]);
+      const [r, pr] = await Promise.all(
+        ["/api/records", "/api/planning"].map(async (url) => {
+          const response = await fetch(url, { cache: "no-store" });
+          // A sibling may fail or never finish; process current denials immediately.
+          if (seq === loadSequence.current) authenticationDenied(response);
+          return response;
+        }),
+      );
       if (seq !== loadSequence.current) return;
-      if (authenticationDenied(r) || authenticationDenied(pr)) return;
       const d = (await r.json()) as { records: Row[]; error?: string },
         pd = (await pr.json()) as PlanningState;
       if (!r.ok) throw Error(d.error);

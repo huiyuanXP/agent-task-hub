@@ -19,6 +19,16 @@ let current = alice, denyPath, deniedToken, hold = false, releaseHeld, heldCount
 const errors = [], outbound = [], requests = [];
 const temporary = mkdtempSync(join(tmpdir(), 'auth-browser-'));
 let holdGate;
+let holdPaths = ['/api/records', '/api/planning'];
+function holdResponses(paths) {
+  holdPaths = paths; heldCount = 0;
+  holdGate = new Promise(resolve => { releaseHeld = resolve; }); hold = true;
+}
+async function waitForHeld(count) {
+  const deadline = Date.now() + 5000;
+  while (heldCount < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(heldCount >= count, 'Real Worker responses reached the delayed ingress boundary');
+}
 const facade = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, origin).pathname;
@@ -36,7 +46,7 @@ const facade = createServer(async (req, res) => {
       method: req.method, headers, redirect: 'manual', ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
     });
     const body = Buffer.from(await response.arrayBuffer());
-    if (hold && ['/api/records', '/api/planning'].includes(path)) { heldCount++; await holdGate; }
+    if (hold && holdPaths.includes(path)) { heldCount++; await holdGate; }
     const outgoing = Object.fromEntries(response.headers);
     delete outgoing['content-encoding']; delete outgoing['content-length'];
     if (outgoing.location?.startsWith(origin)) outgoing.location = base + outgoing.location.slice(origin.length);
@@ -75,8 +85,8 @@ try {
     await page.getByRole('button', { name: '新点子', exact: true }).click();
     await page.getByRole('dialog').getByRole('textbox').first().fill('Unsaved private draft');
   };
-  const cleared = async () => {
-    await page.getByRole('link', { name: '登录', exact: true }).waitFor();
+  const cleared = async (timeout = 7000) => {
+    await page.getByRole('link', { name: '登录', exact: true }).waitFor({ timeout });
     assert.equal(await page.getByRole('dialog').count(), 0);
     assert.equal(await page.getByRole('textbox', { name: '快速记录点子' }).inputValue(), '');
     assert.equal(await page.getByText('Alice Member', { exact: true }).count(), 0);
@@ -117,12 +127,40 @@ try {
   current = alice; await refresh(); await visibleAlice(); await privateDraft(); denyPath = '/api/planning';
   await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await cleared(); denyPath = undefined;
   console.log('PASS: real data 403 clears private state even when session succeeds');
-  current = await token('alice', 10); await refresh(); await visibleAlice(); await privateDraft();
-  holdGate = new Promise(resolve => { releaseHeld = resolve; }); hold = true;
+  current = alice; await refresh(); await visibleAlice(); await privateDraft();
+  holdResponses(['/api/planning']); deniedToken = await token('outsider');
+  const recordsDenied = page.waitForResponse(r => r.url() === base + '/api/records' && r.status() === 401);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  const deadline = Date.now() + 5000;
-  while (heldCount < 2 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(heldCount >= 2, 'Real successful refresh responses held until after expiry');
+  await recordsDenied; await waitForHeld(1);
+  await cleared(2000); // Must clear while the successful planning response is still held.
+  hold = false; releaseHeld(); deniedToken = undefined;
+  await page.waitForLoadState('networkidle'); await cleared();
+  console.log('PASS: records 401 clears promptly while sibling planning response remains pending');
+  current = alice; await refresh(); await visibleAlice(); await privateDraft();
+  holdResponses(['/api/records']); denyPath = '/api/planning';
+  const planningDenied = page.waitForResponse(r => r.url() === base + '/api/planning' && r.status() === 403);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await planningDenied; await waitForHeld(1); await cleared(2000);
+  hold = false; releaseHeld(); denyPath = undefined;
+  await page.waitForLoadState('networkidle'); await cleared();
+  console.log('PASS: planning 403 clears promptly while sibling records response remains pending');
+  current = alice; await refresh(); await visibleAlice();
+  holdResponses(['/api/records']); deniedToken = await token('outsider');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await waitForHeld(1);
+  // Keep the old denial held, but let the new account's refresh proceed.
+  hold = false; deniedToken = undefined; current = bob;
+  await refresh(); await identity('Bob Member').waitFor();
+  await page.getByRole('heading', { name: 'Bob private idea', exact: true }).waitFor();
+  const staleDenial = page.waitForResponse(r => r.url() === base + '/api/records' && r.status() === 401);
+  releaseHeld(); await staleDenial; await page.waitForLoadState('networkidle');
+  await identity('Bob Member').waitFor();
+  await page.getByRole('heading', { name: 'Bob private idea', exact: true }).waitFor();
+  assert.equal(await page.getByRole('link', { name: '登录', exact: true }).count(), 0);
+  console.log('PASS: delayed old-account denial cannot clear the newer verified account');
+  current = await token('alice', 10); await refresh(); await visibleAlice(); await privateDraft();
+  holdResponses(['/api/records', '/api/planning']);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await waitForHeld(2);
   await page.getByRole('link', { name: '登录', exact: true }).waitFor({ timeout: 12000 }); await cleared();
   hold = false; releaseHeld();
   await page.waitForLoadState('networkidle'); await cleared();
