@@ -11,6 +11,8 @@ Source handoff for a private task-planning workspace: Ideas → Plans → Ticket
 - `.openai/hosting.json` keeps the logical `DB` and MCP capability declarations needed by the build, but its original `project_id` has been removed
 - This copy has no link to the original deployed Site. Do not reinsert the original ID. A new deployment needs separate registration, resources, access policy, and explicit review
 - See [migration handoff](docs/MIGRATION.md), [12-ticket roadmap](docs/ROADMAP.md), and [package validation](docs/PACKAGING.md)
+- See [VM1 initialization and validation](docs/VM1-VALIDATION.md) for reproduced checks, local repairs, and independent deployment prerequisites.
+- Track upcoming work in the [GitHub issue roadmap](https://github.com/huiyuanXP/agent-task-hub/issues/27) and [published issue index](docs/GITHUB-ISSUE-ROADMAP.md).
 
 ## Requirements
 
