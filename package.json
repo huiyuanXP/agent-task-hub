@@ -13,7 +13,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "test:execution": "node --experimental-strip-types --test tests/execution/*.test.mjs",
-    "test:execution:api": "node --experimental-strip-types tests/execution/worker-api.mjs"
+    "test:execution:api": "node --experimental-strip-types tests/execution/worker-api.mjs",
+    "test:workspaces": "node --experimental-strip-types --test tests/execution/workspaces.test.mjs tests/execution/docker.test.mjs tests/execution/artifacts.test.mjs tests/execution/inputs.test.mjs tests/execution/watchdog.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -20,3 +20,7 @@ next-env.d.ts
 *.db-wal
 npm-debug.log*
 .DS_Store
+
+# Private local execution metadata, ownership keys and retained evidence.
+.runner-state/
+.runner-tests/
