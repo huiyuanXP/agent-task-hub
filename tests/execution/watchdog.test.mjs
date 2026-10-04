@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {mkdtemp,rm,writeFile,readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import { cleanupFixture } from './fixtures/cleanup.mjs';
 import * as api from '../../runner/workspaces.mjs';
 import * as docker from '../../runner/docker.mjs';
 const childScript=fileURLToPath(new URL('./fixtures/workspace-child.mjs',import.meta.url));
@@ -11,7 +12,7 @@ async function child(t,mode,extra={}){
  const root=await mkdtemp('/tmp/ath-child-');const p=spawn(process.execPath,[childScript,root,mode],{env:{PATH:'/usr/bin:/bin',...extra},stdio:['ignore','ignore','pipe','ipc']});
  let errors='';p.stderr.on('data',b=>{errors+=b.toString().slice(0,4096-errors.length)});
  const message=await new Promise((resolve,reject)=>{p.once('message',resolve);p.once('exit',()=>reject(Error('Child failed: '+errors)));p.once('error',reject)});
- t.after(async()=>{p.kill('SIGKILL');await api.cleanupWorkspace(message.workspace);await rm(root,{recursive:true,force:true})});
+ t.after(async()=>{p.kill('SIGKILL');await cleanupFixture(root)});
  return{p,root,...message};
 }
 for(const mode of ['running','paused'])test(`SIGKILL of supervisor during ${mode} work leaves independent watchdog cleanup`,async t=>{

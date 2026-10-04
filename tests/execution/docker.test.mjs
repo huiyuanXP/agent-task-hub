@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { cleanupFixture } from './fixtures/cleanup.mjs';
 import * as api from '../../runner/workspaces.mjs';
 import * as docker from '../../runner/docker.mjs';
 async function workspace(t, policy = {}) {
   assert.equal(typeof api.startWorkspace, 'function', 'Docker lifecycle implementation is missing');
   const root = await mkdtemp(join(tmpdir(), 'ath-docker-'));
   const w = await api.createWorkspace(join(root, 'state'), { owner: 'test', runId: root, attempt: 1 }, policy);
-  t.after(async () => { await api.cleanupWorkspace(w); await rm(root, { recursive: true, force: true }); });
+  t.after(() => cleanupFixture(root));
   await mkdir(join(root, 'source/input'), { recursive: true });
   const bytes = Buffer.from('{"title":"real Docker"}');
   await writeFile(join(root, 'source/input/ticket.json'), bytes);

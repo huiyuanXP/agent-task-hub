@@ -4,13 +4,14 @@ import { mkdtemp, mkdir, writeFile, readFile, symlink, link, rm } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { cleanupFixture } from './fixtures/cleanup.mjs';
 import * as api from '../../runner/workspaces.mjs';
 const manifest = (path, value) => ({ path, bytes: Buffer.byteLength(value), sha256: createHash('sha256').update(value).digest('hex') });
 
 test('workspace API provides durable isolated ownership, strict imports and idempotent cleanup', async t => {
   assert.equal(typeof api.createWorkspace, 'function', 'isolated workspace implementation is missing');
   const root = await mkdtemp(join(tmpdir(), 'ath-workspaces-'));
-  t.after(async () => { await api.recoverWorkspaces(join(root, 'state')); await rm(root, { recursive: true, force: true }); });
+  t.after(() => cleanupFixture(root));
   const run = { owner: 'alice', runId: 'run-a', attempt: 1 };
   const first = await api.createWorkspace(join(root, 'state'), run, {});
   assert.deepEqual(await api.createWorkspace(join(root, 'state'), run, {}), first);
@@ -54,7 +55,7 @@ test('CPU fractions that round to unlimited or exceed the grant are refused befo
 
 test('metadata tampering cannot redirect resource cleanup and active capacity fails closed',async t=>{
  const root=await mkdtemp(join(tmpdir(),'ath-capacity-'));const stateRoot=join(root,'state');
- const workspaces=[];t.after(async()=>{for(const w of workspaces)await api.cleanupWorkspace(w);await rm(root,{recursive:true,force:true})});
+ const workspaces=[];t.after(()=>cleanupFixture(root));
  for(let i=0;i<8;i++)workspaces.push(await api.createWorkspace(stateRoot,{owner:'capacity',runId:root,attempt:i+1},{}));
  await assert.rejects(api.createWorkspace(stateRoot,{owner:'capacity',runId:root,attempt:9},{}),/capacity/);
  const w=workspaces[0],path=join(stateRoot,w.id,'metadata.json'),original=await readFile(path);
@@ -68,7 +69,7 @@ test('cleanup refuses an actual foreign Docker volume with the deterministic nam
  const docker=await import('../../runner/docker.mjs');const root=await mkdtemp('/tmp/ath-foreign-');
  const w=await api.createWorkspace(root+'/state',{owner:'foreign-test',runId:root,attempt:1},{}),state=await api.inspectWorkspace(w);
  await docker.request('POST','/volumes/create',{body:{Name:state.volumeName,Labels:{'synthetic.foreign':'true'}}});
- t.after(async()=>{await docker.request('DELETE','/volumes/'+state.volumeName);await api.cleanupWorkspace(w);await rm(root,{recursive:true,force:true})});
+ t.after(async()=>{await docker.request('DELETE','/volumes/'+state.volumeName);await cleanupFixture(root)});
  await assert.rejects(api.cleanupWorkspace(w),/Foreign resource ownership/);
  assert.ok(await docker.inspectVolume(state.volumeName));
 });
@@ -76,7 +77,7 @@ test('cleanup refuses an actual foreign Docker volume with the deterministic nam
 test('an unresolved Docker create remains pending after 404 and reaps a later owned object without starting it',async t=>{
  const docker=await import('../../runner/docker.mjs'),disk=await import('../../runner/state.mjs');
  const root=await mkdtemp('/tmp/ath-late-create-');const w=await api.createWorkspace(root+'/state',{owner:'late',runId:root,attempt:1},{});
- t.after(async()=>{await api.cleanupWorkspace(w);await rm(root,{recursive:true,force:true})});
+ t.after(async()=>{await cleanupFixture(root)});
  await disk.withWorkspace(w,async(state,save)=>{state.state='importing';state.creates={volume:'intent',importer:'intent',container:'none'};await save()});
  await api.cleanupWorkspace(w);
  assert.equal((await api.inspectWorkspace(w)).state,'removal_pending');

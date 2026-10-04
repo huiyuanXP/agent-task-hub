@@ -106,3 +106,11 @@ We'll use your proxy for fetch requests.` This is expected host package/build
 network configuration; it is retained rather than bypassed. A successful build is
 not a claim of warning-free output or guest proxy inheritance. Docker runtime
 proxy fields remain explicitly empty and are verified by the execution suite.
+
+
+Execution fixture teardown uses bounded reconciliation and deletes its private
+signed state root only after every owned workspace is confirmed removed. If a
+create remains uncertain, teardown fails with the retained root path and leaves
+its cleanup guardian/key/metadata intact. A later stopped resource can then be
+reaped without losing the durable cleanup obligation. The actual late-create
+regression checks this behavior; successful tests leave no owned Docker resources.
