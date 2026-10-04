@@ -314,9 +314,33 @@ The real catalog argv is executed with native Node, verifying the retained JSON
 artifact and rejecting changed input. HTTP/MCP tests exercise shared services
 against that storage. `node --experimental-strip-types tests/execution/authorization-worker.mjs`
 loads the built Worker with fresh D1 and static assets on loopback 5197, checks
-concurrent atomic preparation and shared owner decisions, then drives installed
-system Chromium through pending/approve/revoke/reload/cancel/fresh-request/reject.
-It blocks all browser requests outside the loopback origin. For this isolated test,
-install Playwright 1.58.2 in `/workspace/scratch/task2-browser-tools`; application
-package files and lockfile remain unchanged. The harness awaits `worker.ready`
-before HTTP and removes its synthetic database/runtime on completion.
+concurrent atomic preparation and shared owner decisions, then drives
+configured or Playwright-managed Chromium through
+pending/approve/revoke/reload/cancel/fresh-request/reject. It blocks all browser
+requests outside the loopback origin. The harness awaits `worker.ready` before
+HTTP and removes its synthetic database/runtime on completion.
+
+The browser test always runs; missing tooling or a missing Chromium executable
+fails with setup instructions before any Worker/D1 state is created. By default
+it loads `import("playwright")` and uses Playwright's installed Chromium. To keep
+application dependencies and the lockfile unchanged, install tooling in a new
+owned temporary directory outside the repository:
+
+```bash
+execution_tools=$(mktemp -d "${TMPDIR:-/tmp}/execution-browser-tools.XXXXXX")
+npm install --prefix "$execution_tools" --package-lock=false --no-save --no-audit --no-fund playwright@1.58.2
+PLAYWRIGHT_BROWSERS_PATH="$execution_tools/browsers" "$execution_tools/node_modules/.bin/playwright" install chromium
+EXECUTION_PLAYWRIGHT_MODULE="$execution_tools/node_modules/playwright/index.mjs" \
+PLAYWRIGHT_BROWSERS_PATH="$execution_tools/browsers" \
+node --experimental-strip-types tests/execution/authorization-worker.mjs
+```
+
+Run `npm run build` first and keep loopback port5197 free. Alternatively set
+`EXECUTION_CHROMIUM_PATH` to an installed system Chromium executable; then the
+Playwright browser download is unnecessary. `EXECUTION_PLAYWRIGHT_MODULE` accepts
+an explicit module file path/URL or an importable package specifier. Set optional
+`EXECUTION_BROWSER_SCREENSHOT` to a desired PNG path in an existing owned output
+directory to retain a screenshot; otherwise the test writes no screenshot.
+Browser/module/output paths have no dependency on the session workspace layout.
+Remove the tooling directory when finished; the harness automatically removes
+its own fresh runtime/database on both success and failure.

@@ -1,12 +1,12 @@
-// Actual built Worker + fresh D1 and system Chromium; loopback only.
+// Actual built Worker + fresh D1 and configured/bundled Chromium; loopback only.
 import assert from 'node:assert/strict';
 import { Miniflare } from 'miniflare';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 const base = 'http://127.0.0.1:5197';
-const temporary = mkdtempSync(join(tmpdir(), 'authorization-worker-'));
-let worker, browser;
+let temporary, worker, browser;
 const identity = { 'oai-authenticated-user-id': 'owner-local', 'oai-authenticated-user-email': 'owner-local@example.test' };
 async function request(path, body, headers = {}) {
   const response = await fetch(base + path, { headers: { ...identity, ...(body === undefined ? {} : { origin: base, 'content-type': 'application/json' }), ...headers }, ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) });
@@ -14,6 +14,23 @@ async function request(path, body, headers = {}) {
   return { status: response.status, json };
 }
 try {
+  const tooling = process.env.EXECUTION_PLAYWRIGHT_MODULE ?? 'playwright';
+  const moduleSpecifier = isAbsolute(tooling) || tooling.startsWith('.') ? pathToFileURL(resolve(tooling)).href : tooling;
+  let chromium;
+  try {
+    ({ chromium } = await import(moduleSpecifier));
+    if (typeof chromium?.launch !== 'function') throw Error('Module does not export Playwright chromium');
+  } catch (cause) {
+    throw new Error('Browser acceptance prerequisites unavailable: cannot load Playwright. Install Playwright 1.58.2 outside the repository, then set EXECUTION_PLAYWRIGHT_MODULE to its index.mjs path (or make import("playwright") resolvable). See docs/EXECUTION.md.', { cause });
+  }
+  try {
+    if (process.env.EXECUTION_CHROMIUM_PATH) accessSync(process.env.EXECUTION_CHROMIUM_PATH, constants.X_OK);
+    browser = await chromium.launch({ ...(process.env.EXECUTION_CHROMIUM_PATH ? { executablePath: process.env.EXECUTION_CHROMIUM_PATH } : {}), headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  } catch (cause) {
+    throw new Error('Browser acceptance prerequisites unavailable: cannot launch Chromium. Install the Playwright Chromium browser using its CLI, or set EXECUTION_CHROMIUM_PATH to an installed executable. See docs/EXECUTION.md.', { cause });
+  }
+  // Resolve and launch browser prerequisites before creating any Worker/D1 state.
+  temporary = mkdtempSync(join(tmpdir(), 'authorization-worker-'));
   const config = JSON.parse(readFileSync('dist/server/wrangler.json', 'utf8'));
   worker = new Miniflare({ host: '127.0.0.1', port: 5197, modulesRoot: 'dist/server',
     modules: [config.main, ...readdirSync('dist/server', { recursive: true }).filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
@@ -58,8 +75,6 @@ try {
   assert.equal(await count('execution_runs'), 1); assert.equal(await count('execution_authorizations'), 1);
   await db.prepare('DROP TRIGGER storage_fault').run();
   console.log('Worker/D1: catalog, concurrent atomic preparation, retries/conflicts, scope validation, same-origin, preserved planning tools, HTTP/MCP owner decisions and generic storage rollback passed');
-  const { chromium } = await import('/workspace/scratch/task2-browser-tools/node_modules/playwright/index.mjs');
-  browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   const page = await browser.newPage({ extraHTTPHeaders: identity });
   await page.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -77,6 +92,12 @@ try {
   await panel.getByRole('button', { name: '取消 Run，允许重新申请' }).click();
   assert.deepEqual(errors, []);
   assert.equal(await count('execution_runs'), 3); assert.equal(await count('execution_authorizations'), 3); assert.equal(await count('authorization_audit'), 7);
-  await page.screenshot({ path: '/workspace/scratch/task2-browser.png', fullPage: true });
+  if (process.env.EXECUTION_BROWSER_SCREENSHOT) await page.screenshot({ path: resolve(process.env.EXECUTION_BROWSER_SCREENSHOT), fullPage: true });
   console.log('Chromium UI: real catalog selection, persisted reload, pending → approve → revoke → cancel → new pending → reject → cancel passed; no page errors');
-} finally { if (browser) await browser.close(); if (worker) await worker.dispose(); rmSync(temporary, { recursive: true, force: true }); }
+} finally {
+  try { if (browser) await browser.close(); }
+  finally {
+    try { if (worker) await worker.dispose(); }
+    finally { if (temporary) rmSync(temporary, { recursive: true, force: true }); }
+  }
+}
