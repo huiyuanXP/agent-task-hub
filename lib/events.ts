@@ -1,9 +1,167 @@
-import {database} from './store';
-export const EVENT='idea.planning_requested';
-export function safeCallback(value:string){const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||(u.port&&u.port!=='443')||!(u.hostname==='chatgpt.com'||u.hostname.endsWith('.chatgpt.com')||u.hostname==='openai.com'||u.hostname.endsWith('.openai.com')))throw new Error('Callback must use a trusted OpenAI HTTPS host');return u.href;}
-export function secretBytes(secret:string){if(!secret?.startsWith('whsec_'))throw Error('Invalid signing secret');const b=Uint8Array.from(atob(secret.slice(6)),c=>c.charCodeAt(0));if(b.length<24||b.length>64)throw Error('Invalid signing key length');return b;}
-async function signature(secret:string,message:string){const key=await crypto.subtle.importKey('raw',secretBytes(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signed=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(message));return 'v1,'+btoa(String.fromCharCode(...new Uint8Array(signed)));}
-export async function signedPost(sub:any,event:any,id:string){const body=JSON.stringify(event);if(new TextEncoder().encode(body).length>262144)throw Error('Event too large');const timestamp=String(Math.floor(Date.now()/1000));const message=`${id}.${timestamp}.${body}`;let sig=await signature(sub.secret,message);if(sub.previousSecret&&sub.rotationUntil>Date.now())sig+=' '+await signature(sub.previousSecret,message);console.info(JSON.stringify({component:'events',stage:'signature_ready'}));const response=await fetch(safeCallback(sub.url),{method:'POST',redirect:'manual',signal:AbortSignal.timeout(8000),headers:{'Content-Type':'application/json','webhook-id':id,'webhook-timestamp':timestamp,'webhook-signature':sig,'X-MCP-Subscription-Id':sub.id},body});if(response.status>=300&&response.status<400)throw new TypeError('Callback redirects are forbidden');return response;}
-export async function subId(owner:string,p:any){const args=p.arguments||{};const canonical=JSON.stringify(Object.fromEntries(Object.entries(args).sort(([a],[b])=>a.localeCompare(b))));const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([owner,p.delivery.url,p.name,canonical])));return 'sub_'+Array.from(new Uint8Array(hash)).map(n=>n.toString(16).padStart(2,'0')).join('');}
-export async function deliverJob(jobId:string,owner:string){const db=database();const job:any=await db.prepare('SELECT * FROM jobs WHERE id=? AND owner=?').bind(jobId,owner).first();if(!job||job.status==='done')return;const idea:any=await db.prepare('SELECT revision FROM records WHERE id=? AND owner=?').bind(job.idea_id,owner).first();if(!idea||idea.revision!==job.idea_revision)return;const event=JSON.parse(job.event);const {results}=await db.prepare('SELECT * FROM subscriptions WHERE owner=? AND expires>?').bind(owner,Date.now()).all();let targets=0,accepted=0;for(const row of results as any[]){const sub=JSON.parse(row.body);if(sub.args.project&&sub.args.project!==event.data.project)continue;targets++;let ok=false;for(let attempt=0;attempt<3;attempt++){try{const response=await signedPost(sub,event,event.eventId);if(response.ok){ok=true;break}if(response.status===410){await db.prepare('DELETE FROM subscriptions WHERE id=? AND owner=?').bind(row.id,owner).run();break}if(response.status===413||!(response.status===429||response.status>=500))break;}catch{}if(attempt<2)await new Promise(r=>setTimeout(r,250*2**attempt));}if(ok)accepted++;}
-await db.prepare('UPDATE jobs SET delivery=? WHERE id=? AND owner=?').bind(!targets?'no_subscription':accepted===targets?'accepted':accepted?'partial':'failed',jobId,owner).run();}
+import type {
+  Subscription,
+  SubscriptionRow,
+  JobRow,
+  PlanningEvent,
+  RpcParams,
+} from "./types";
+import { database } from "./store";
+export const EVENT = "idea.planning_requested";
+export function safeCallback(value: string) {
+  const u = new URL(value);
+  if (
+    u.protocol !== "https:" ||
+    u.username ||
+    u.password ||
+    (u.port && u.port !== "443") ||
+    !(
+      u.hostname === "chatgpt.com" ||
+      u.hostname.endsWith(".chatgpt.com") ||
+      u.hostname === "openai.com" ||
+      u.hostname.endsWith(".openai.com")
+    )
+  )
+    throw new Error("Callback must use a trusted OpenAI HTTPS host");
+  return u.href;
+}
+export function secretBytes(secret: string) {
+  if (!secret?.startsWith("whsec_")) throw Error("Invalid signing secret");
+  const b = Uint8Array.from(atob(secret.slice(6)), (c) => c.charCodeAt(0));
+  if (b.length < 24 || b.length > 64) throw Error("Invalid signing key length");
+  return b;
+}
+async function signature(secret: string, message: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signed = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(message),
+  );
+  return "v1," + btoa(String.fromCharCode(...new Uint8Array(signed)));
+}
+export async function signedPost(
+  sub: Subscription,
+  event: PlanningEvent | { type: string; challenge: string },
+  id: string,
+) {
+  const body = JSON.stringify(event);
+  if (new TextEncoder().encode(body).length > 262144)
+    throw Error("Event too large");
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const message = `${id}.${timestamp}.${body}`;
+  let sig = await signature(sub.secret, message);
+  if (sub.previousSecret && sub.rotationUntil && sub.rotationUntil > Date.now())
+    sig += " " + (await signature(sub.previousSecret, message));
+  console.info(
+    JSON.stringify({ component: "events", stage: "signature_ready" }),
+  );
+  const response = await fetch(safeCallback(sub.url), {
+    method: "POST",
+    redirect: "manual",
+    signal: AbortSignal.timeout(8000),
+    headers: {
+      "Content-Type": "application/json",
+      "webhook-id": id,
+      "webhook-timestamp": timestamp,
+      "webhook-signature": sig,
+      "X-MCP-Subscription-Id": sub.id,
+    },
+    body,
+  });
+  if (response.status >= 300 && response.status < 400)
+    throw new TypeError("Callback redirects are forbidden");
+  return response;
+}
+export async function subId(
+  owner: string,
+  p: RpcParams & { delivery: { mode: string; url: string; secret: string } },
+) {
+  const args = p.arguments || {};
+  const canonical = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(args).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+  );
+  const hash = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      JSON.stringify([owner, p.delivery.url, p.name, canonical]),
+    ),
+  );
+  return (
+    "sub_" +
+    Array.from(new Uint8Array(hash))
+      .map((n) => n.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+export async function deliverJob(jobId: string, owner: string) {
+  const db = database();
+  const job = await db
+    .prepare("SELECT * FROM jobs WHERE id=? AND owner=?")
+    .bind(jobId, owner)
+    .first<JobRow>();
+  if (!job || job.status === "done") return;
+  const idea = await db
+    .prepare("SELECT revision FROM records WHERE id=? AND owner=?")
+    .bind(job.idea_id, owner)
+    .first<{ revision: number }>();
+  if (!idea || idea.revision !== job.idea_revision) return;
+  const event = JSON.parse(job.event) as PlanningEvent;
+  const { results } = await db
+    .prepare("SELECT * FROM subscriptions WHERE owner=? AND expires>?")
+    .bind(owner, Date.now())
+    .all<SubscriptionRow>();
+  let targets = 0,
+    accepted = 0;
+  for (const row of results) {
+    const sub = JSON.parse(row.body) as Subscription;
+    if (sub.args.project && sub.args.project !== event.data.project) continue;
+    targets++;
+    let ok = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await signedPost(sub, event, event.eventId);
+        if (response.ok) {
+          ok = true;
+          break;
+        }
+        if (response.status === 410) {
+          await db
+            .prepare("DELETE FROM subscriptions WHERE id=? AND owner=?")
+            .bind(row.id, owner)
+            .run();
+          break;
+        }
+        if (
+          response.status === 413 ||
+          !(response.status === 429 || response.status >= 500)
+        )
+          break;
+      } catch {}
+      if (attempt < 2)
+        await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+    }
+    if (ok) accepted++;
+  }
+  await db
+    .prepare("UPDATE jobs SET delivery=? WHERE id=? AND owner=?")
+    .bind(
+      !targets
+        ? "no_subscription"
+        : accepted === targets
+          ? "accepted"
+          : accepted
+            ? "partial"
+            : "failed",
+      jobId,
+      owner,
+    )
+    .run();
+}

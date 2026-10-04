@@ -1,6 +1,105 @@
-import {visibleJobs} from '../../../lib/planning-state';
-import {getChatGPTUser} from '../../chatgpt-auth';
-import {database} from '../../../lib/store';
-import {deliverJob,EVENT} from '../../../lib/events';
-export async function GET(){const user=await getChatGPTUser();if(!user)return Response.json({error:'请登录'},{status:401});try{const db=database();const results=await visibleJobs(user.userId);const count:any=await db.prepare('SELECT count(*) as total FROM subscriptions WHERE owner=? AND expires>?').bind(user.userId,Date.now()).first();return Response.json({jobs:results,subscriptions:count.total},{headers:{'Cache-Control':'no-store'}});}catch(e){console.error(e);return Response.json({error:'暂时无法读取自动规划状态'},{status:503});}}
-export async function POST(req:Request){const user=await getChatGPTUser();if(!user)return Response.json({error:'请登录'},{status:401});if(req.headers.get('origin')!==new URL(req.url).origin)return Response.json({error:'请求来源无效'},{status:403});try{const {ideaId}=await req.json() as any;const db=database();const idea:any=await db.prepare('SELECT * FROM records WHERE id=? AND owner=? AND kind=?').bind(ideaId,user.userId,'idea').first();if(!idea)return Response.json({error:'点子不存在'},{status:404});const id=`planning:${idea.id}:${idea.revision}`;const body=JSON.parse(idea.body),now=new Date().toISOString();const event={eventId:'evt_'+id,name:EVENT,timestamp:now,data:{idea_id:idea.id,idea_revision:idea.revision,job_id:id,project:body.project||'通用'},cursor:null};await db.prepare('INSERT OR IGNORE INTO jobs (id,owner,idea_id,idea_revision,status,event,delivery,created) VALUES (?,?,?,?,?,?,?,?)').bind(id,user.userId,idea.id,idea.revision,'queued',JSON.stringify(event),'pending',now).run();const current:any=await db.prepare('SELECT * FROM jobs WHERE id=? AND owner=?').bind(id,user.userId).first();if(current.status==='planning'&&current.lease>Date.now())return Response.json({job:{id,status:current.status,delivery:current.delivery}});if(current.status!=='done'&&current.delivery==='accepted'){event.eventId='evt_'+crypto.randomUUID();event.timestamp=new Date().toISOString();await db.prepare("UPDATE jobs SET event=?,status='queued',claim_token=NULL,lease=NULL,delivery='pending' WHERE id=? AND owner=? AND status!='done' AND (lease IS NULL OR lease<?)").bind(JSON.stringify(event),id,user.userId,Date.now()).run();}await deliverJob(id,user.userId);const job=await db.prepare('SELECT id,status,delivery FROM jobs WHERE id=? AND owner=?').bind(id,user.userId).first();return Response.json({job});}catch(e){console.error(e);return Response.json({error:'请求失败，点子仍然保留，请重试'},{status:503});}}
+import type { RecordRow, RecordBody, JobRow } from "../../../lib/types";
+import { visibleJobs } from "../../../lib/planning-state";
+import { getChatGPTUser } from "../../chatgpt-auth";
+import { database } from "../../../lib/store";
+import { deliverJob, EVENT } from "../../../lib/events";
+export async function GET() {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "请登录" }, { status: 401 });
+  try {
+    const db = database();
+    const results = await visibleJobs(user.userId);
+    const count = await db
+      .prepare(
+        "SELECT count(*) as total FROM subscriptions WHERE owner=? AND expires>?",
+      )
+      .bind(user.userId, Date.now())
+      .first<{ total: number }>();
+    return Response.json(
+      { jobs: results, subscriptions: count?.total || 0 },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch (e) {
+    console.error(e);
+    return Response.json(
+      { error: "暂时无法读取自动规划状态" },
+      { status: 503 },
+    );
+  }
+}
+export async function POST(req: Request) {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "请登录" }, { status: 401 });
+  if (req.headers.get("origin") !== new URL(req.url).origin)
+    return Response.json({ error: "请求来源无效" }, { status: 403 });
+  try {
+    const { ideaId } = (await req.json()) as { ideaId: string };
+    const db = database();
+    const idea = await db
+      .prepare("SELECT * FROM records WHERE id=? AND owner=? AND kind=?")
+      .bind(ideaId, user.userId, "idea")
+      .first<RecordRow>();
+    if (!idea) return Response.json({ error: "点子不存在" }, { status: 404 });
+    const id = `planning:${idea.id}:${idea.revision}`;
+    const body = JSON.parse(idea.body) as RecordBody,
+      now = new Date().toISOString();
+    const event = {
+      eventId: "evt_" + id,
+      name: EVENT,
+      timestamp: now,
+      data: {
+        idea_id: idea.id,
+        idea_revision: idea.revision,
+        job_id: id,
+        project: body.project || "通用",
+      },
+      cursor: null,
+    };
+    await db
+      .prepare(
+        "INSERT OR IGNORE INTO jobs (id,owner,idea_id,idea_revision,status,event,delivery,created) VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .bind(
+        id,
+        user.userId,
+        idea.id,
+        idea.revision,
+        "queued",
+        JSON.stringify(event),
+        "pending",
+        now,
+      )
+      .run();
+    const current = await db
+      .prepare("SELECT * FROM jobs WHERE id=? AND owner=?")
+      .bind(id, user.userId)
+      .first<JobRow>();
+    if (!current) throw Error("Planning job unavailable");
+    if (current.status === "planning" && (current.lease ?? 0) > Date.now())
+      return Response.json({
+        job: { id, status: current.status, delivery: current.delivery },
+      });
+    if (current.status !== "done" && current.delivery === "accepted") {
+      event.eventId = "evt_" + crypto.randomUUID();
+      event.timestamp = new Date().toISOString();
+      await db
+        .prepare(
+          "UPDATE jobs SET event=?,status='queued',claim_token=NULL,lease=NULL,delivery='pending' WHERE id=? AND owner=? AND status!='done' AND (lease IS NULL OR lease<?)",
+        )
+        .bind(JSON.stringify(event), id, user.userId, Date.now())
+        .run();
+    }
+    await deliverJob(id, user.userId);
+    const job = await db
+      .prepare("SELECT id,status,delivery FROM jobs WHERE id=? AND owner=?")
+      .bind(id, user.userId)
+      .first<Pick<JobRow, "id" | "status" | "delivery">>();
+    return Response.json({ job });
+  } catch (e) {
+    console.error(e);
+    return Response.json(
+      { error: "请求失败，点子仍然保留，请重试" },
+      { status: 503 },
+    );
+  }
+}
