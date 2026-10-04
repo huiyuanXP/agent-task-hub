@@ -101,12 +101,14 @@ export default function Home() {
       subscriptions: 0,
     });
   const [session, setSession] = useState<SessionState | null>(null);
+  const [accountVersion, setAccountVersion] = useState(0);
   const sessionRef = useRef<SessionState | null>(null);
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const identityVersion = useRef(0);
   const loadSequence = useRef(0);
   const clearPrivateState = useCallback(() => {
     identityVersion.current++;
+    setAccountVersion(identityVersion.current);
     setRows([]);
     setPlanning({ jobs: [], subscriptions: 0 });
     setDraft(null);
@@ -134,6 +136,12 @@ export default function Home() {
     expireSession();
     return true;
   }, [expireSession]);
+  const accountId = session?.user.userId;
+  const panelAuthenticationDenied = useCallback(() => {
+    if (identityVersion.current === accountVersion && sessionRef.current?.user.userId === accountId) {
+      expireSession();
+    }
+  }, [accountId, accountVersion, expireSession]);
   const load = useCallback(async (silent = false) => {
     const seq = ++loadSequence.current;
     if (!silent) setLoading(true);
@@ -847,7 +855,7 @@ export default function Home() {
                   ))}
                 </div>
               )}
-              {view === "board" && <AuthorizationPanel key={session?.user.userId ?? "anonymous"} tickets={tickets} />}
+              {view === "board" && <AuthorizationPanel key={session?.user.userId ?? "anonymous"} tickets={tickets} onAuthenticationDenied={panelAuthenticationDenied} />}
               {view === "board" && (
                 <div className={"board " + (list ? "as-list" : "")}>
                   {Object.entries(statuses)

@@ -14,11 +14,11 @@ const origin = 'https://hub.example.test', issuer = 'https://browser-team.cloudf
 const { privateKey, publicKey } = await generateKeyPair('RS256');
 const jwk = { ...await exportJWK(publicKey), kid: 'browser', alg: 'RS256', use: 'sig' };
 const token = (sub, seconds = 600) => new SignJWT({ type: 'app', email: `${sub}@example.test`, name: `${sub === 'alice' ? 'Alice' : 'Bob'} Member` }).setProtectedHeader({ alg: 'RS256', kid: 'browser', typ: 'JWT' }).setIssuer(issuer).setAudience(audience).setSubject(sub).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + seconds).sign(privateKey);
-const alice = await token('alice'), bob = await token('bob');
+const alice = await token('alice'), bob = await token('bob'), outsider = await token('outsider');
 let current = alice, denyPath, deniedToken, hold = false, releaseHeld, heldCount = 0, restricted, worker, base;
 const errors = [], outbound = [], requests = [];
 const temporary = mkdtempSync(join(tmpdir(), 'auth-browser-'));
-let holdGate;
+let holdGate, panelFault;
 let holdPaths = ['/api/records', '/api/planning'];
 function holdResponses(paths) {
   holdPaths = paths; heldCount = 0;
@@ -31,7 +31,8 @@ async function waitForHeld(count) {
 }
 const facade = createServer(async (req, res) => {
   try {
-    const path = new URL(req.url, origin).pathname;
+    const url = new URL(req.url, origin), path = url.pathname;
+    const panelDenied = panelFault && panelFault.path === path && panelFault.method === req.method && (!panelFault.query || url.searchParams.has(panelFault.query));
     requests.push({ path, method: req.method });
     if (path === '/cdn-cgi/access/logout') {
       // Provider-owned redirect terminus only; local revocation is checked below.
@@ -40,9 +41,9 @@ const facade = createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const headers = new Headers(req.headers);
     headers.delete('host'); headers.delete('authorization'); headers.delete('cookie');
-    headers.set('cf-access-jwt-assertion', path === '/api/records' && deniedToken ? deniedToken : current);
+    headers.set('cf-access-jwt-assertion', panelDenied && panelFault.status === 401 ? outsider : path === '/api/records' && deniedToken ? deniedToken : current);
     if (headers.get('origin') === base) headers.set('origin', origin);
-    const response = await worker.dispatchFetch((denyPath === path ? 'https://alternate.example.test' : origin) + req.url, {
+    const response = await worker.dispatchFetch((denyPath === path || panelDenied && panelFault.status === 403 ? 'https://alternate.example.test' : origin) + req.url, {
       method: req.method, headers, redirect: 'manual', ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
     });
     const body = Buffer.from(await response.arrayBuffer());
@@ -73,6 +74,10 @@ try {
   const idea = await api('/api/records', alice, { kind: 'idea', title: 'Alice private idea', text: 'Private body', project: 'Alice project' });
   await api('/api/planning', alice, { ideaId: idea.id });
   await api('/api/records', bob, { kind: 'idea', title: 'Bob private idea' });
+  const ticket = await api('/api/records', alice, { kind: 'ticket', title: 'Alice private authorization Ticket', status: 'todo' });
+  const catalog = await api(`/api/authorization?ticketId=${ticket.id}&expectedRevision=1`, alice);
+  const prepared = await api('/api/authorization', alice, { action: 'prepare', ticketId: ticket.id, expectedRevision: 1, requestId: 'browser-auth-private', attempt: 1, scope: catalog.operations.map(({ operationId, definitionHash }) => ({ operationId, definitionHash })), budget: { timeoutMs: 30000, memoryMb: 256, cpus: 1, pids: 64 }, expiresAt: Date.now() + 600000 });
+
   await new Promise(resolve => facade.listen(0, '127.0.0.1', resolve)); base = `http://127.0.0.1:${facade.address().port}`;
   restricted = await launchRestrictedBrowser(chromium, [base], { viewport: { width: 1440, height: 1000 } });
   restricted.context.on('page', page => page.on('pageerror', error => errors.push(error.stack ?? error.message)));
@@ -157,6 +162,83 @@ try {
   await page.getByRole('heading', { name: 'Bob private idea', exact: true }).waitFor();
   assert.equal(await page.getByRole('link', { name: '登录', exact: true }).count(), 0);
   console.log('PASS: delayed old-account denial cannot clear the newer verified account');
+  const panel = page.getByRole('region', { name: '执行授权' });
+  const openPanel = async (pending = true) => {
+    current = alice; await refresh(); await identity('Alice Member').waitFor();
+    await page.getByRole('button', { name: /Ticket 看板/ }).click();
+    await panel.getByText(pending ? 'pending' : 'cancelled', { exact: pending }).waitFor();
+    await page.waitForLoadState('networkidle');
+  };
+  const panelDenial = () => page.waitForResponse(r => {
+    const url = new URL(r.url());
+    return url.pathname === panelFault.path && r.request().method() === panelFault.method && r.status() === panelFault.status && (!panelFault.query || url.searchParams.has(panelFault.query));
+  });
+  const assertPanelCleared = async () => {
+    await cleared(2000);
+    assert.equal(await panel.count(), 0);
+    assert.equal(await page.getByText('Alice private authorization Ticket', { exact: true }).count(), 0);
+  };
+  await openPanel();
+  assert.ok((await panel.innerText()).includes(prepared.run.id));
+  panelFault = { path: '/api/authorization', method: 'GET', query: 'ticketId', status: 401 };
+  holdResponses(['/api/execution']);
+  const deniedPoll = panelDenial(); // Exercise the actual five-second panel poll.
+  await deniedPoll; await waitForHeld(1); await assertPanelCleared();
+  hold = false; releaseHeld(); await page.waitForLoadState('networkidle'); panelFault = undefined;
+  console.log('PASS: authorization poll 401 immediately clears workspace while sibling Run list is held');
+  await openPanel();
+  panelFault = { path: '/api/execution', method: 'GET', status: 403 }; holdResponses(['/api/authorization']);
+  const deniedList = panelDenial(); await panel.getByRole('button', { name: '刷新授权状态' }).click();
+  await deniedList; await waitForHeld(1); await assertPanelCleared();
+  hold = false; releaseHeld(); await page.waitForLoadState('networkidle'); panelFault = undefined;
+  console.log('PASS: Run-list 403 immediately clears workspace while sibling catalog is held');
+  await openPanel();
+  panelFault = { path: '/api/authorization', method: 'GET', query: 'id', status: 403 };
+  const deniedDetail = panelDenial(); await panel.getByRole('button', { name: '刷新授权状态' }).click();
+  await deniedDetail; await assertPanelCleared(); panelFault = undefined;
+  console.log('PASS: authorization detail 403 clears previously displayed private Run and grant');
+  await openPanel();
+  await db.prepare('ALTER TABLE execution_authorizations RENAME TO unavailable_authorizations').run();
+  const unavailablePanel = page.waitForResponse(r => new URL(r.url()).pathname === '/api/authorization' && r.status() === 503);
+  await panel.getByRole('button', { name: '刷新授权状态' }).click(); await unavailablePanel;
+  await panel.getByRole('alert').waitFor(); await identity('Alice Member').waitFor();
+  await panel.getByText('pending', { exact: true }).waitFor();
+  assert.ok((await panel.innerText()).includes(prepared.run.id));
+  assert.equal(await page.getByRole('link', { name: '登录', exact: true }).count(), 0);
+  await db.prepare('ALTER TABLE unavailable_authorizations RENAME TO execution_authorizations').run();
+  console.log('PASS: real panel storage 503 retains verified account and prior Run/grant');
+  for (const [path, button, status] of [['/api/authorization', '批准授权', 403], ['/api/execution', '取消 Run，允许重新申请', 401]]) {
+    await openPanel(); panelFault = { path, method: 'POST', status };
+    const deniedWrite = panelDenial(); await panel.getByRole('button', { name: button }).click();
+    await deniedWrite; await assertPanelCleared(); panelFault = undefined;
+    console.log(`PASS: ${button} write denial clears workspace before response-body processing`);
+  }
+  for (const method of ['GET', 'POST']) {
+    await openPanel(); panelFault = { path: '/api/execution', method, status: 401 }; holdResponses(['/api/execution']);
+    await panel.getByRole('button', { name: method === 'GET' ? '刷新授权状态' : '取消 Run，允许重新申请' }).click();
+    await waitForHeld(1); hold = false; panelFault = undefined; current = bob;
+    await refresh(); await identity('Bob Member').waitFor();
+    await page.getByRole('heading', { name: 'Bob private idea', exact: true }).waitFor();
+    const stalePanel = page.waitForResponse(r => new URL(r.url()).pathname === '/api/execution' && r.status() === 401);
+    releaseHeld(); await stalePanel; await page.waitForLoadState('networkidle');
+    await identity('Bob Member').waitFor();
+    await page.getByRole('heading', { name: 'Bob private idea', exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: '登录', exact: true }).count(), 0);
+    console.log(`PASS: stale panel ${method} denial cannot clear a newer account`);
+  }
+  await openPanel(); panelFault = { path: '/api/execution', method: 'GET', status: 401 }; holdResponses(['/api/execution']);
+  await panel.getByRole('button', { name: '刷新授权状态' }).click(); await waitForHeld(1);
+  await page.getByRole('button', { name: /点子收件箱/ }).click();
+  hold = false; panelFault = undefined;
+  const unmountedDenial = page.waitForResponse(r => new URL(r.url()).pathname === '/api/execution' && r.status() === 401);
+  releaseHeld(); await unmountedDenial; await page.waitForLoadState('networkidle'); await visibleAlice();
+  console.log('PASS: unmounted panel denial cannot clear the still-current workspace account');
+  await api('/api/execution', alice, { action: 'cancel', id: prepared.run.id, expectedVersion: prepared.run.version });
+  await openPanel(false); panelFault = { path: '/api/authorization', method: 'POST', status: 401 };
+  const deniedPrepare = panelDenial(); await panel.getByRole('button', { name: '请求执行授权' }).click();
+  await deniedPrepare; await assertPanelCleared(); panelFault = undefined;
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM execution_authorizations').first()).n, 1);
+  console.log('PASS: authorization preparation 401 clears workspace without creating a grant');
   current = await token('alice', 10); await refresh(); await visibleAlice(); await privateDraft();
   holdResponses(['/api/records', '/api/planning']);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
