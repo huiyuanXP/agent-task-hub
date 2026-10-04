@@ -57,16 +57,31 @@ try {
   await expectStatus(409, '/api/execution', { body: { action: 'create', ...input, expectedRevision: 2 } });
   await expectStatus(404, '/api/execution', { owner: 'owner-b', body: { action: 'create', ...input } });
   console.log('Worker API: anonymous401, origin403, stale409, foreign Ticket404');
-  const { run } = await expectStatus(201, '/api/execution', { body: { action: 'create', ...input } });
+  const initialCreates = await Promise.all(Array.from({ length: 6 }, () => request('/api/execution', { body: { action: 'create', ...input } })));
+  for (const result of initialCreates) assert.equal(result.status, 201, JSON.stringify(result.json));
+  const { run } = initialCreates[0].json;
+  assert.equal(new Set(initialCreates.map(result => result.json.run.id)).size, 1);
+  assert.equal((await sql("SELECT count(*) AS total FROM execution_runs WHERE ticket_id='ticket-1'"))[0].total, 1);
   assert.equal(run.owner, 'owner-a'); assert.equal(run.actor, 'owner-a'); assert.equal(run.source, 'execution'); assert.equal(run.state, 'queued');
   const retries = await Promise.all(Array.from({ length: 6 }, () => request('/api/execution', { body: { action: 'create', ...input } })));
   for (const retry of retries) { assert.equal(retry.status, 201); assert.equal(retry.json.run.id, run.id); }
+  await database.prepare('INSERT INTO records VALUES (?,?,?,?,?,?,?)').bind('ticket-distinct-race', 'owner-a', 'ticket', '{"title":"Distinct-request race","status":"todo"}', 1, '2026-10-04T00:00:00.000Z', '2026-10-04T00:00:00.000Z').run();
+  const distinctCreates = await Promise.all(Array.from({ length: 6 }, (_, n) => request('/api/execution', { body: { action: 'create', ...input, ticketId: 'ticket-distinct-race', requestId: 'distinct-race-' + n } })));
+  const winners = distinctCreates.filter(result => result.status === 201);
+  const conflicts = distinctCreates.filter(result => result.status === 409);
+  assert.equal(winners.length, 1, JSON.stringify(distinctCreates));
+  assert.equal(conflicts.length, 5, JSON.stringify(distinctCreates));
+  for (const result of conflicts) assert.equal(result.json.code, 'ACTIVE_RUN');
+  const distinctRows = await sql("SELECT id,request_id,state FROM execution_runs WHERE ticket_id='ticket-distinct-race'");
+  assert.equal(distinctRows.length, 1); assert.equal(distinctRows[0].id, winners[0].json.run.id);
+  assert.equal(distinctRows[0].request_id, winners[0].json.run.requestId); assert.equal(distinctRows[0].state, 'queued');
+  console.log('Worker API: initial identical creates201 one row, existing retries201 one ID, distinct initial creates one201/five409 one active row');
   await expectStatus(409, '/api/execution', { body: { action: 'create', ...input, attempt: 2 } });
   await expectStatus(409, '/api/execution', { body: { action: 'create', ...input, requestId: 'second-request' } });
   const read = await request('/api/execution?id=' + run.id); assert.equal(read.status, 200); assert.equal(read.cache, 'no-store');
   await expectStatus(404, '/api/execution?id=' + run.id, { owner: 'owner-b' });
   assert.deepEqual((await expectStatus(200, '/api/execution', { owner: 'owner-b' })).runs, []);
-  console.log('Worker API: concurrent create/retry one ID, changed retry409, active Ticket409, read200, foreign Run404/list empty');
+  console.log('Worker API: changed retry409, active Ticket409, read200, foreign Run404/list empty');
   for (const body of ['{', 'null', '[]', '"string"', { action: 'create', ...input, owner: 'forged' }, { action: 'create', ...input, state: 'running' }, { action: 'transition', to: 'succeeded', evidence: {} }, { action: 'cancel', id: run.id, expectedVersion: 1, evidence: {} }]) {
     await expectStatus(400, '/api/execution', { body });
   }
@@ -88,7 +103,7 @@ try {
   const successor = await expectStatus(201, '/api/execution', { body: { action: 'create', ...input, expectedRevision: 2, requestId: 'later', attempt: 2 } });
   assert.notEqual(successor.run.id, run.id);
   assert.deepEqual((await sql("SELECT * FROM records WHERE id='legacy-run'"))[0], legacy);
-  assert.equal((await sql('SELECT count(*) AS total FROM execution_runs'))[0].total, 2);
+  assert.equal((await sql('SELECT count(*) AS total FROM execution_runs'))[0].total, 3);
   console.log('Worker API: immutable old body/revision, cancel CAS, next attempt, legacy manual display + unchanged stored snapshot PASS');
   console.log('PASS actual built Worker/D1 API isolation, migrations and regressions');
 } finally {

@@ -48,7 +48,7 @@ export async function createRun(db: ExecutionDatabase, context: RunContext, inpu
   const ticket = await db.prepare("SELECT revision,body FROM records WHERE id=? AND owner=? AND kind='ticket'").bind(input.ticketId, context.owner).first<{ revision: number; body: string }>();
   if (!ticket) throw new ExecutionError('NOT_FOUND', 'Ticket not found', 404);
   if (ticket.revision !== input.expectedRevision) throw new ExecutionError('REVISION_CONFLICT', 'Ticket revision changed', 409);
-  if (ticket.body.length > 80000) invalid('Ticket contract too large');
+  if ([...ticket.body].length > 80000) invalid('Ticket contract too large');
   try { const body: unknown = JSON.parse(ticket.body); if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('Invalid Ticket contract'); } catch { invalid('Invalid Ticket contract'); }
   throw new ExecutionError('ACTIVE_RUN', 'Ticket already has an active execution Run', 409);
 }

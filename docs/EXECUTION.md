@@ -50,6 +50,11 @@ original Run after the Ticket changes or the Run terminates. A partial unique
 index permits at most one active Run per owner/Ticket, including racing requests.
 A new request can create a later attempt after termination.
 
+Stored raw Ticket JSON is bounded at 80,000 Unicode code points, consistently
+with SQLite `length(text)` and the service diagnostic fallback. Supplementary
+Unicode characters count as one code point. HTTP request bodies remain bounded
+at 16,384 UTF-8 bytes.
+
 Immutable identity/contract columns and mutable lifecycle columns are separate.
 SQL triggers block identity/contract updates and deletion. Lifecycle writes use
 owner/state/version compare-and-swap, increment version, and record the actor.
@@ -146,7 +151,8 @@ The HTTP tests exercise the handler against those databases. The API command
 loads the actual built ES modules in Miniflare's native workerd runtime, applies
 all migrations to isolated temporary D1, and sends HTTP requests to loopback
 port 5197. It verifies authentication, owner scoping, revision/idempotency,
-concurrency, schema/media/body limits, cancellation, next attempts, legacy
+initial identical and distinct-request creation races, concurrent retries,
+schema/media/body limits, cancellation, next attempts, legacy
 immutability and manual display. The runtime and its database are removed after
 validation. Rebuild first so the API command tests current code. Port 5197 must
 be free. This harness intentionally bypasses Wrangler's development proxy,
@@ -155,10 +161,16 @@ the same workerd application returns the required 413 directly.
 
 Task 1 acceptance evidence: the initial storage run produced 48 expected failures
 with an importable throwing skeleton; the separate HTTP boundary run produced
-six expected failures. The final native suite covers 58 behaviors, including all
-36 state edges, real ECDSA verification, two SQLite connections, contract/schema
+six expected failures. The final native suite covers 59 behaviors, including a
+supplementary-Unicode storage boundary case and all 36 state edges, real ECDSA
+verification, two SQLite connections, contract/schema
 limits, immutable SQL guards and caller mutation across asynchronous boundaries.
 The isolated built Worker/D1 API suite passed the scenarios listed above; lint,
 TypeScript, build and migration regeneration also passed. Signed test receipts
 use explicitly synthetic backend identities; these tests establish verification
 of trusted receipts, not an assertion that model creation executed a process.
+
+Build output includes informational tooling messages: Wrangler detects the
+required session proxy, and Vinext reports that static analysis cannot classify
+some dynamic routes. The build succeeds; lint and TypeScript report no application
+diagnostics. Proxy settings and locked dependencies are preserved.

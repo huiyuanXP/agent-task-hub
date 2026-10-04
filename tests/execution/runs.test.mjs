@@ -185,3 +185,19 @@ test('transition retains exactly the receipt and trusted context validated at en
   const updated = await pending;
   assert.equal(updated.state, 'succeeded'); assert.deepEqual(updated.evidence, original);
 });
+test('supplementary Unicode contracts use the same codepoint bound for creation and active conflicts', async t => {
+  const { db, sqlite } = fixture(t);
+  const body = JSON.stringify({ title: 'Unicode scope', scope: '😀'.repeat(40000), status: 'todo' });
+  assert.ok(body.length > 80000);
+  assert.ok([...body].length < 80000);
+  sqlite.prepare('UPDATE records SET body=? WHERE id=?').run(body, 'ticket-1');
+  const run = await createRun(db, context, input);
+  assert.equal(run.ticketBody, body);
+  const nextInput = { ...input, requestId: 'unicode-next', attempt: 2 };
+  await assert.rejects(createRun(db, context, nextInput), error => error.status === 409 && error.code === 'ACTIVE_RUN');
+  await transitionRun(db, context, { id: run.id, expectedVersion: 1, to: 'cancelled' });
+  const next = await createRun(db, context, nextInput);
+  assert.equal(next.ticketBody, body);
+  assert.equal(next.attempt, 2);
+  assert.notEqual(next.id, run.id);
+});
