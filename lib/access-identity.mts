@@ -70,6 +70,12 @@ export function parseAccessConfig(settings: AccessEnvironment): AccessConfig {
 
 function compactToken(token: string): string {
   if (typeof token !== 'string' || token.length > MAX_TOKEN_LENGTH || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return invalid();
+  for (const segment of token.split('.')) {
+    // Unused base64url padding bits must be zero. Otherwise identical signature
+    // bytes can have different compact strings and bypass token-hash revocation.
+    const base64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+    if (segment.length % 4 === 1 || btoa(atob(base64)).replace(/=+$/, '') !== base64) return invalid();
+  }
   return token;
 }
 

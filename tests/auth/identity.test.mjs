@@ -193,3 +193,33 @@ test('a provider redirect never selects a token-controlled or redirected JWKS ho
     return new Response(null, { status: 302, headers: { location: 'https://attacker.test/jwks' } });
   })(await sign(), instant));
 });
+
+test('rejects equivalent RSA signature encodings so a token has only one revocation hash', async () => {
+  const token = await sign();
+  const verify = verifier();
+  const identity = await verify(token, instant);
+  assert.equal(identity.tokenHash, createHash('sha256').update(token).digest('hex'));
+  const [protectedPart, payloadPart, signature] = token.split('.');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const finalIndex = alphabet.indexOf(signature.at(-1));
+  // RSA-2048 signatures contain 256 bytes: four unused bits in the final sextet.
+  assert.equal(signature.length % 4, 2);
+  for (let paddingBits = 1; paddingBits <= 15; paddingBits++) {
+    const alternate = signature.slice(0, -1) + alphabet[finalIndex + paddingBits];
+    assert.deepEqual(Buffer.from(alternate, 'base64url'), Buffer.from(signature, 'base64url'));
+    const variant = `${protectedPart}.${payloadPart}.${alternate}`;
+    assert.notEqual(createHash('sha256').update(variant).digest('hex'), identity.tokenHash);
+    await assert.rejects(verify(variant, instant), 'Equivalent signature bytes must not mint another revocation hash');
+  }
+});
+
+for (const [name, token] of [
+  ['header padding bits', 'AB.AA.AA'], ['payload padding bits', 'AA.AAB.AA'],
+  ['signature padding bits', 'AA.AA.AB'], ['impossible segment length', 'A.AA.AA'],
+]) test(`credential transport rejects noncanonical base64url: ${name}`, () => {
+  assert.throws(() => readAccessToken(new Headers({ authorization: `Bearer ${token}` })));
+});
+test('credential transport preserves canonical base64url segments of each possible byte length', () => {
+  const token = 'AQ.AAE.AAEC';
+  assert.deepEqual(readAccessToken(new Headers({ authorization: `Bearer ${token}` })), { token, transport: 'bearer' });
+});
