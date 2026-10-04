@@ -14,7 +14,8 @@
     "db:generate": "drizzle-kit generate",
     "test:unit": "node --test tests/*.test.mjs",
     "test:integration": "node scripts/test-integration.mjs",
-    "test": "npm run test:unit && npm run test:integration"
+    "test": "npm run test:unit && npm run test:browser-policy && npm run test:integration",
+    "test:browser-policy": "node --test tests/browser/*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
