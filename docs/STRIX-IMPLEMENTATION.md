@@ -17,3 +17,16 @@ Fresh verification on 2026-10-04 used a clean index export in `/home/agent/work/
 - Read-only independent review found no blocking issue; both documentation corrections were applied. `git diff --check` passed.
 
 Evidence logs and synthetic runtime artifacts are outside Git in `/home/agent/work/agent-task-hub/strix-validation/`. The original `.npmrc` remains absent and documented; no guessed replacement was added. Baseline lint remains 49 errors and two warnings, handled by #2. No original Site, production data, credentials or compiled output were added.
+
+## #2 — Application lint and types
+
+Added shared record bodies, browser drafts/rows, planning results/events, MCP arguments/schema definitions, subscription records and explicit D1 result types. Removed all 47 explicit `any` declarations, the unused icon/catch variable, synchronous first-load effect update and raw homepage anchor. The initial load is scheduled after mounting and canceled during cleanup; normal homepage navigation resets workspace state using Vinext's `onNavigate`, preserving modified-click behavior. Previously compressed files were formatted for review.
+
+Verification on 2026-10-04:
+
+- Baseline reproduction: 49 lint errors and two warnings; final `npm run lint`: exit 0, zero warnings/errors. Existing rule configuration is unchanged.
+- Final `npx --no-install tsc --noEmit` and `npm run build`: exit 0.
+- Fresh isolated D1 migrations and all 12 API/MCP and six Chromium baseline groups passed after the typing changes. Server startup was awaited after an initial harness connection-refused attempt; no application fix was needed for that setup race.
+- A browser test first demonstrated that the converted brand Link failed to return from the Ticket board to the inbox. The test passed after adding the navigation reset.
+- Lockfile SHA remains unchanged. Runtime evidence lives outside Git in `strix-validation/issue2-*.log`; no synthetic database or browser artifact is tracked.
+- Independent read-only review approved the final diff with no outstanding findings; it also verified Ctrl-click preserves the current workspace.
