@@ -240,7 +240,6 @@ export function recoverWorkspaces(root) {
     const states = [];
     await disk.cleanTemps(root);
     for (const id of await disk.records(root)) {
-      await disk.cleanTemps(join(root, id));
       try { states.push(await disk.load(root, key, id)); } catch (error) {
         if (error.code !== 'ENOENT') throw error;
         // Creation persists metadata before Docker mutations; only an empty reservation is removable.
@@ -249,7 +248,10 @@ export function recoverWorkspaces(root) {
     }
     return states.map(state => disk.reference(root, state));
   }).then(async refs => {
-    for (const ref of refs) await cleanupWorkspace(ref);
+    for (const ref of refs) {
+      await disk.withWorkspace(ref, (_, __, root) => disk.cleanTemps(join(root, ref.id)));
+      await cleanupWorkspace(ref);
+    }
     return Promise.all(refs.map(ref => inspectWorkspace(ref)));
   });
 }

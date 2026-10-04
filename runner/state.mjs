@@ -22,11 +22,14 @@ export async function secureRoot(root) {
   return root;
 }
 /** Kernel flock survives neither SIGKILL nor dead parents; no stale lock deletion race. */
+async function withLock(path, fn) {
+  const lock = spawn('/usr/bin/flock', ['--exclusive', '--timeout', '5', path, process.execPath, '-e', "process.stdout.write('locked\\n');process.stdin.resume();process.stdin.on('end',()=>process.exit(0))"], { env: { PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'ignore'] });
+  await new Promise((resolve, reject) => { lock.once('error', reject); lock.once('exit', () => reject(Error('State lock unavailable'))); lock.stdout.once('data', () => resolve()); });
+  try { return await fn(); } finally { lock.stdin.end(); }
+}
 export async function withRoot(root, fn) {
   root = await secureRoot(root);
-  const lock = spawn('/usr/bin/flock', ['--exclusive', '--timeout', '5', join(root, '.lock'), process.execPath, '-e', "process.stdout.write('locked\\n');process.stdin.resume();process.stdin.on('end',()=>process.exit(0))"], { env: { PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'ignore'] });
-  await new Promise((resolve, reject) => { lock.once('error', reject); lock.once('exit', () => reject(Error('State lock unavailable'))); lock.stdout.once('data', () => resolve()); });
-  try {
+  return withLock(join(root, '.lock'), async () => {
     let key;
     try { key = await safeRead(join(root, '.ownership-key'), 32); }
     catch (error) {
@@ -36,7 +39,7 @@ export async function withRoot(root, fn) {
     }
     if (key.length !== 32) throw Error('Invalid state ownership key');
     return await fn(root, key);
-  } finally { lock.stdin.end(); }
+  });
 }
 export async function safeRead(path, maxBytes = 2097152, allowRetiredMetadata = false) {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -85,7 +88,12 @@ export async function withWorkspace(workspace, fn) {
   exact(workspace, ['root', 'id', 'owner', 'runId', 'attempt']);
   workspace = { ...workspace };
   if (workspace.id !== workspaceId(workspace)) throw Error('Workspace ownership identity mismatch');
-  return withRoot(workspace.root, async (root, key) => {
+  const root = await secureRoot(workspace.root);
+  const key = await safeRead(join(root, '.ownership-key'), 32);
+  // Validate the private directory before opening its lock. Admission alone uses
+  // the root lock; a slow operation cannot serialize unrelated workspaces.
+  await load(root, key, workspace.id);
+  return withLock(join(root, workspace.id, '.lock'), async () => {
     const state = await load(root, key, workspace.id);
     if (state.owner !== workspace.owner || state.runId !== workspace.runId || state.attempt !== workspace.attempt) throw Error('Workspace ownership mismatch');
     return fn(state, () => save(root, key, state), root, key);

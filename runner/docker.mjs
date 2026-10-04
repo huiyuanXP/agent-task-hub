@@ -63,11 +63,22 @@ export async function verifyEnvironment(id) {
   if (env.some(value => !allowed.has(value.split('=')[0])) || PROXY_KEYS.some(key => env.filter(value => value.startsWith(key + '=')).length !== 1 || !env.includes(key + '='))) throw Error('Unexpected container environment authority');
 }
 export async function removeContainer(id, state) {
-  const found = await inspectContainer(id);
-  if (!found) return;
-  assertOwned(found, state);
-  try { await request('DELETE', `/containers/${id}?force=1&v=1`); } catch (e) { if (e.statusCode !== 404) throw e; }
-  if (await inspectContainer(id)) throw Error('Container removal not confirmed');
+  const until = Date.now() + 5000;
+  while (true) {
+    const found = await inspectContainer(id);
+    if (!found) return;
+    assertOwned(found, state);
+    try { await request('DELETE', `/containers/${id}?force=1&v=1`); }
+    catch (error) {
+      // Independent deadline owners may remove the same exact container at once.
+      // Docker returns 409 while removal is in progress; only observed absence
+      // completes the obligation, never the conflict response itself.
+      if (![404, 409].includes(error.statusCode)) throw error;
+    }
+    if (!await inspectContainer(id)) return;
+    if (Date.now() >= until) throw Error('Container removal not confirmed');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 }
 export async function removeVolume(name, state) {
   const found = await inspectVolume(name);

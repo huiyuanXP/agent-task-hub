@@ -92,6 +92,7 @@ try {
   await page.getByRole('alert').waitFor();
   assert.match(await page.getByRole('alert').innerText(), /登录/);
   ok('Built preview hydrates and displays anonymous API auth failure');
+  await restricted.flushNetworkEvidence();
   assert.deepEqual(errors, [], 'Browser JavaScript errors');
   assert.deepEqual(networkErrors, [], 'Browser network policy errors');
   assert.ok(requestedExternal.every(origin => origin === 'https://fonts.googleapis.com'), 'Unexpected external application request');

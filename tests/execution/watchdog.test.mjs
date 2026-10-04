@@ -52,3 +52,20 @@ test('setup guardian survives parent SIGKILL and reaps a late stopped create aft
  assert.equal(await docker.inspectVolume(state.volumeName),null);
  await assert.rejects(docker.request('POST',`/containers/${late.Id}/start`),e=>e.statusCode===404);
 });
+
+for (const different of [false, true]) test(`deadline removal ignores a live ${different ? 'different' : 'own'} workspace lock holder`, async t => {
+ const {workspace,state}=await child(t,'environment');
+ const lockedWorkspace=different?await api.createWorkspace(workspace.root,{owner:'lock-test',runId:'different',attempt:1}):workspace;
+ const holder=spawn(process.execPath,[fileURLToPath(new URL('./fixtures/hold-workspace-lock.mjs',import.meta.url)),JSON.stringify(lockedWorkspace)],{env:{PATH:'/usr/bin:/bin'},stdio:['ignore','ignore','inherit','ipc']});
+ await new Promise((resolve,reject)=>{holder.once('message',resolve);holder.once('exit',()=>reject(Error('Lock holder exited early')))});
+ let admitted;
+ try {
+  if(different) admitted=await api.createWorkspace(workspace.root,{owner:'lock-test',runId:'admitted-while-stalled',attempt:1});
+  await waitUntil(async()=>await docker.inspectContainer(state.containerId)===null,Math.max(1,state.deadlineMs-Date.now())+2000);
+  assert.equal(holder.exitCode,null,'normal lock holder remains alive throughout deadline enforcement');
+  t.diagnostic(JSON.stringify({differentWorkspace:different,overrunMs:Date.now()-state.deadlineMs,containerAbsent:true}));
+ } finally {holder.send('release');await new Promise(resolve=>holder.once('exit',resolve));if(different)await api.cleanupWorkspace(lockedWorkspace);if(admitted)await api.cleanupWorkspace(admitted)}
+ await api.cleanupWorkspace(workspace);
+ assert.equal((await api.inspectWorkspace(workspace)).deadlineMs,state.deadlineMs);
+ await assert.rejects(api.startWorkspace(workspace),/state|final/);
+});

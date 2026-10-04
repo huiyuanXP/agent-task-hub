@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { load, safeRead, processIdentity, reference } from './state.mjs';
-import { inspectContainer, assertOwned } from './docker.mjs';
+import { inspectContainer, assertOwned, removeContainer } from './docker.mjs';
 import { cleanupWorkspace } from './workspaces.mjs';
 export async function watch(root, id) {
   const key = await safeRead(join(root, '.ownership-key'), 32);
@@ -17,7 +17,11 @@ export async function watch(root, id) {
   process.send?.({ id: state.containerId, pid: process.pid, start: await processIdentity(process.pid) });
   while (true) {
     if (Date.now() >= state.deadlineMs || performance.now() >= due) {
-      try { await cleanupWorkspace(ref); return; } catch { /* Retain responsibility until Docker confirms removal. */ }
+      try {
+        // This immutable concrete-ID obligation must never wait for supervisor locks.
+        await removeContainer(state.containerId, state);
+        await cleanupWorkspace(ref); return;
+      } catch { /* Retain responsibility until Docker confirms removal. */ }
     } else {
       try { if ((await load(root, key, id)).state === 'removed') return; } catch {
         // A removed state root is never recreated by observation.

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile, readFile, access } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
-import { constants } from 'node:fs';
+import { join } from 'node:path';
+import { trustedBrowserExecutable } from '../tests/browser/executable.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createWorkspace, freePort, loopbackUrl, startChild, runChild, stopChild, waitForHttp } from '../tests/harness.mjs';
 
@@ -18,10 +18,7 @@ process.on('SIGTERM', onTerm);
 const env = Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'CI', 'PLAYWRIGHT_BROWSERS_PATH', 'TEST_CHROMIUM_EXECUTABLE'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
 Object.assign(env, { CLOUDFLARE_CF_FETCH_ENABLED: 'false', WRANGLER_SEND_METRICS: 'false', WRANGLER_WRITE_LOGS: 'false', NO_COLOR: '1' });
 try {
-  if (env.TEST_CHROMIUM_EXECUTABLE !== undefined) {
-    if (!isAbsolute(env.TEST_CHROMIUM_EXECUTABLE)) throw Error('TEST_CHROMIUM_EXECUTABLE must be an absolute trusted local path');
-    await access(env.TEST_CHROMIUM_EXECUTABLE, constants.X_OK);
-  }
+  if (env.TEST_CHROMIUM_EXECUTABLE !== undefined) env.TEST_CHROMIUM_EXECUTABLE = await trustedBrowserExecutable(env.TEST_CHROMIUM_EXECUTABLE);
   await mkdir(join(root, 'test-results'), { recursive: true });
   artifacts = await mkdtemp(join(root, 'test-results/run-'));
   await access(join(root, 'tests/browser/node_modules/playwright/index.mjs'));
@@ -56,11 +53,18 @@ try {
   await command('api', 'python3', ['tests/api.py']);
   await command('browser', process.execPath, ['tests/browser/checks.mjs']);
   for (const child of servers) if (child.result) throw new Error(`Server exited during checks: ${JSON.stringify(child.result)}`);
+  const verified = {};
   for (const suite of ['api', 'browser']) {
     const evidence = JSON.parse(await readFile(join(artifacts, suite + '-evidence.json'), 'utf8'));
     if (evidence.status !== 'passed') throw new Error(`${suite} evidence did not pass`);
+    verified[suite] = evidence;
     for (const check of evidence.checks) console.log(`PASS: ${check}`);
   }
+  // Emit the complete synthetic evidence before deleting successful run files.
+  // One capped record per invocation keeps externally captured logs reviewable.
+  const summary = JSON.stringify(verified);
+  if (Buffer.byteLength(summary) > 65536) throw Error('Verified summary exceeds evidence capacity');
+  console.log('VERIFIED_EVIDENCE ' + summary);
 } catch (error) {
   failure = error;
   console.error(error.stack ?? error);

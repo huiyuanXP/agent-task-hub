@@ -54,7 +54,9 @@ for (const [name, script] of [
   assert.equal((await api.inspectWorkspace(w)).state, 'frozen');
 });
 test('watchdog removes running container at immutable deadline and cannot restart a finalized ID', async t => {
-  const w = await workspace(t, { ceilings: { timeoutMs: 8000 } });
+  // Keep the total deadline fixed, while leaving setup enough room to reach
+  // the running-execution condition this regression specifically exercises.
+  const w = await workspace(t, { ceilings: { timeoutMs: 15000 } });
   const state = await api.inspectWorkspace(w);
   const execution = await api.createExecution(w, ['node', '-e', 'setInterval(()=>{},1000)']);
   await assert.rejects(api.startExecution(w, execution.id), /deadline|removed|exit|socket|aborted|timeout/);

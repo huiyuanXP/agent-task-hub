@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { load, safeRead, processIdentity, reference } from './state.mjs';
+import { removeContainer } from './docker.mjs';
 import { cleanupWorkspace } from './workspaces.mjs';
 export async function guard(root, id) {
   const activation = new Promise(resolve => { process.once('message', resolve); process.once('disconnect', resolve); });
@@ -21,7 +22,12 @@ export async function guard(root, id) {
     }
     if (state.state === 'removed') return;
     if (state.state === 'removal_pending' || Date.now() >= state.deadlineMs || performance.now() >= due) {
-      try { if ((await cleanupWorkspace(ref))?.state === 'removed') return; } catch { /* Retain owned cleanup obligation. */ }
+      try {
+        // Signed concrete IDs can be stopped without a state lock. Uncertain
+        // name-only creates remain reserved for durable reconciliation below.
+        for (const concreteId of [state.containerId, state.importerId].filter(Boolean)) await removeContainer(concreteId, state);
+        if ((await cleanupWorkspace(ref))?.state === 'removed') return;
+      } catch { /* Retain owned cleanup obligation. */ }
       delay = Math.min(2000, delay * 2);
     }
     await new Promise(resolve => setTimeout(resolve, delay));

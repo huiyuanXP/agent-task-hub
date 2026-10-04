@@ -158,6 +158,12 @@ renewal, progress, completion and shutdown handling.
   is polled, and leases renew concurrently. Persist consumer request IDs before
   network writes so response loss does not mint a different execution. Shutdown
   requests cancellation and waits for confirmed stop or the hard deadline.
+  Owner-scoped reads also expose actual bounded retained stdout/stderr and
+  declared artifact bytes, checking hashes/lengths against the trusted receipt.
+  Exact declared artifact identities replace arbitrary filesystem paths.
+  Retained content survives workspace cleanup and supervisor restart; missing
+  verified content is explicitly unavailable. Metadata polls remain bounded and
+  lightweight, with separate content reads/downloads where appropriate.
 - Use container cwd `/job`, read-only input volume `/job/input` and a dedicated
   writable 64 MiB work tmpfs `/job/output`. This preserves the catalog's fixed
   relative argv paths. Auxiliary `/tmp` and `/dev/shm` are separately bounded.
@@ -250,5 +256,16 @@ Retain every proxy-blocked origin and separately record page/context requests:
 the UI's strict expected external-request check applies to application traffic,
 while browser background traffic remains blocked and visible. Verify actual
 forbidden page requests are recorded and cannot contact forbidden servers.
+Observe worker sockets through a bounded public-CDP adapter: fixed harness-only
+ephemeral loopback listener, same-port endpoint validation without redirects,
+network observation before worker resume, recursive owned-context attribution,
+and explicit failure/cleanup. The diagnostic port is not a browser-allowed
+origin. No private browser-library internals, arbitrary caller launch flags or
+application-provided claims substitute for network observation.
+Verify the diagnostic listener's actual IPv4/IPv6 binding through Linux proc
+network tables filtered to its generated port; endpoint advertising alone is
+insufficient. Fail on wildcard/non-loopback listeners or unavailable verification.
+This browser harness supports Linux with readable proc tables, matching the
+execution backend and CI. Keep this verifier a focused replaceable component.
 Each issue is independently reviewed and merged before claiming the next.
 No placeholders, unfinished branches or new Tickets standing in for acceptance.

@@ -1,18 +1,15 @@
 import { createServer, request as httpRequest } from 'node:http';
-import { isAbsolute } from 'node:path';
-import { access } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { loopbackUrl } from '../harness.mjs';
+import { trustedBrowserExecutable } from './executable.mjs';
+import { observeWorkerNetwork, localDebuggerEndpoint } from './worker-network.mjs';
+import { loopbackUrl, freePort } from '../harness.mjs';
 
 // Chromium bypasses proxies for loopback by default. <-loopback> removes that
 // bypass, so native redirects, popups, frames and workers all cross this gate.
 export async function launchRestrictedBrowser(chromium, values, options = {}) {
-  const executablePath = process.env.TEST_CHROMIUM_EXECUTABLE;
-  if (executablePath !== undefined && !isAbsolute(executablePath)) throw Error('TEST_CHROMIUM_EXECUTABLE must be an absolute trusted local path');
-  if (executablePath !== undefined) await access(executablePath, constants.X_OK);
+  const executablePath = await trustedBrowserExecutable(process.env.TEST_CHROMIUM_EXECUTABLE);
   const origins = values.map(value => loopbackUrl(value).origin);
   const blocked = [], requestedExternal = [], errors = [], sockets = new Set(), tunnels = new WeakMap();
-  let browser, closing;
+  let browser, closing, stopObserving;
   const track = socket => {
     if (!sockets.has(socket)) {
       sockets.add(socket);
@@ -94,9 +91,11 @@ export async function launchRestrictedBrowser(chromium, values, options = {}) {
     return closing;
   };
   try {
-    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
+    const debuggerPort = await freePort();
+    browser = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${debuggerPort}`, '--remote-debugging-address=127.0.0.1'], ...(executablePath ? { executablePath } : {}), proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
     browser.once('disconnected', () => { void closeProxy().catch(error => errors.push(error.message)); });
     const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
+    stopObserving = await observeWorkerNetwork(await localDebuggerEndpoint(debuggerPort), origins, requestedExternal, errors, () => browser.close());
     context.on('request', request => {
       const url = new URL(request.url());
       if (['http:', 'https:'].includes(url.protocol) && !origins.includes(url.origin)) requestedExternal.push(url.origin);
@@ -108,10 +107,12 @@ export async function launchRestrictedBrowser(chromium, values, options = {}) {
       requestedExternal.push(url.origin);
       webSocket.close();
     });
-    return { browser, context, blocked, requestedExternal, errors, proxyOrigin, close: async () => {
+    return { browser, context, blocked, requestedExternal, errors, proxyOrigin, flushNetworkEvidence: () => stopObserving.flush(), close: async () => {
+      stopObserving?.close();
       try { await browser.close(); } finally { await closeProxy(); }
     } };
   } catch (error) {
+    stopObserving?.close();
     await browser?.close();
     await closeProxy();
     throw error;

@@ -78,8 +78,13 @@ never mounted.
 deterministic identity and immutable policy/deadline. Use one administrator-selected
 private root, never a client-provided directory. The root must have mode 0700 and
 contain no symlink. An HMAC key protects metadata; atomic file replacement and
-file/directory fsync preserve durable transitions. Kernel flock serializes state
-mutations across the supervisor and cleanup processes and releases on death.
+file/directory fsync preserve durable transitions. A short root flock serializes admission; individual workspace flocks serialize
+state transitions. Source and Docker I/O never hold the global admission lock.
+Both independent cleanup processes remove signed, exact-owned concrete container
+IDs before acquiring any supervisor state lock, then reconcile metadata. A stalled
+lock owner cannot extend execution. Concurrent Docker removal conflicts are retried
+within a bounded cleanup budget and only inspected absence confirms removal;
+uncertain create obligations remain reserved. Kernel flocks release on death.
 
 `importInputs(workspace, sourceRoot, manifests)` first verifies source bytes and
 arms an independent setup guardian. Its identity is persisted and its acknowledgement

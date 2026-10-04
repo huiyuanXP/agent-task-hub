@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { chromium } from './node_modules/playwright/index.mjs';
+import { localDebuggerEndpoint } from './worker-network.mjs';
 import { launchRestrictedBrowser } from './network.mjs';
 
 async function endpoint(handler) {
@@ -243,4 +244,69 @@ test('allowed WebSockets work while off-origin upgrades never reach their server
     await restricted?.close();
     await Promise.all([first, forbidden].map(server => server.close()));
   }
+});
+
+test('worker-only forbidden WebSocket appears in strict application evidence', async t => {
+  let contacts = 0;
+  const forbidden = await endpoint((_, response) => response.end('forbidden'));
+  forbidden.server.on('connection', () => contacts++);
+  const first = await endpoint((_, response) => response.end('<p>local</p>'));
+  let restricted;
+  try {
+    restricted = await launchRestrictedBrowser(chromium, [first.origin]);
+    const page = await restricted.context.newPage();
+    await page.goto(first.origin);
+    const target = forbidden.origin.replace('http:', 'ws:');
+    const result = await page.evaluate(url => new Promise((resolve, reject) => {
+      const code = `const socket=new WebSocket(${JSON.stringify(url)});socket.onerror=()=>postMessage('blocked')`;
+      const blob = URL.createObjectURL(new Blob([code], {type:'text/javascript'}));
+      const worker = new Worker(blob);
+      const timer = setTimeout(() => reject(Error('Worker timeout')), 5000);
+      worker.onmessage = event => { clearTimeout(timer); worker.terminate(); URL.revokeObjectURL(blob); resolve(event.data); };
+    }), target + '/only-worker');
+    assert.equal(result, 'blocked');
+    await restricted.flushNetworkEvidence();
+    assert.equal(contacts, 0);
+    assert.ok(restricted.blocked.includes(forbidden.origin.replace('http:', 'https:')));
+    t.diagnostic(JSON.stringify({target,contacts,requestedExternal:restricted.requestedExternal,blocked:restricted.blocked,errors:restricted.errors}));
+    assert.ok(restricted.requestedExternal.includes(target), 'worker request must appear as its actual ws origin');
+    assert.throws(() => assert.ok(restricted.requestedExternal.every(origin => origin === 'https://fonts.googleapis.com')), 'strict application allowlist must reject worker traffic');
+    assert.deepEqual(restricted.errors, []);
+  } finally { await restricted?.close(); await Promise.all([first,forbidden].map(server=>server.close())); }
+});
+
+test('directory browser selectors fail before browser allocation', async () => {
+  const previous = process.env.TEST_CHROMIUM_EXECUTABLE;
+  process.env.TEST_CHROMIUM_EXECUTABLE = '/tmp';
+  try {
+    await assert.rejects(launchRestrictedBrowser({launch:async()=>{throw Error('Browser allocation attempted')}}, ['http://127.0.0.1:12345']), /regular executable file/);
+  } finally { if (previous === undefined) delete process.env.TEST_CHROMIUM_EXECUTABLE; else process.env.TEST_CHROMIUM_EXECUTABLE = previous; }
+});
+
+test('the application cannot reach the trusted loopback debugger listener', async () => {
+  const first = await endpoint((_,response)=>response.end('<p>local</p>'));
+  let restricted;
+  try {
+    restricted=await launchRestrictedBrowser(chromium,[first.origin]);
+    const session=await restricted.browser.newBrowserCDPSession();
+    const command=await session.send('Browser.getBrowserCommandLine');
+    const port=command.arguments.find(value=>value.startsWith('--remote-debugging-port=')).split('=')[1];
+    const target=`http://127.0.0.1:${port}`;
+    const page=await restricted.context.newPage();await page.goto(first.origin);
+    const result=await page.evaluate(url=>fetch(url).then(response=>response.status).catch(()=>'blocked'),target+'/json/version');
+    assert.ok(result==='blocked'||result===403);
+    await restricted.flushNetworkEvidence();
+    assert.ok(restricted.blocked.includes(target));
+    assert.ok(restricted.requestedExternal.includes(target));
+    assert.deepEqual(restricted.errors,[]);
+  } finally {await restricted?.close();await first.close()}
+});
+
+
+test('debugger discovery rejects a wildcard listener even when it advertises loopback', async () => {
+  let contacted=0;
+  const server=createServer((_,response)=>{contacted++;response.end('{}')});
+  await new Promise(resolve=>server.listen(0,'0.0.0.0',resolve));
+  try {await assert.rejects(localDebuggerEndpoint(server.address().port),/only on loopback/);assert.equal(contacted,0)}
+  finally {await new Promise(resolve=>server.close(resolve))}
 });

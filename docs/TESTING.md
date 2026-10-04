@@ -1,6 +1,6 @@
 # Regression checks
 
-Use Node 22.23.3, npm and Python 3 on Linux for the complete suite. The browser/API harness alone also supports macOS. The harness uses POSIX process groups for cleanup. CI runs on Ubuntu. Install the application from its existing lock and Chromium from the separate Playwright 1.58.2 lock:
+Use Node 22.23.3, npm and Python 3 on Linux for the complete suite. The browser observer also requires Linux proc networking tables to verify its debugger listener binding. The harness uses POSIX process groups for cleanup. CI runs on Ubuntu. Install the application from its existing lock and Chromium from the separate Playwright 1.58.2 lock:
 
 ```sh
 npm run install:ci
@@ -22,7 +22,7 @@ Every integration invocation copies an allowlist of application inputs to a new 
 
 The runner prints each workspace, URL and artifact path. Readiness has a 90-second absolute deadline per server and detects child exit. Application listeners are loopback only; both suites independently validate their targets. API redirects and environment proxy settings are disabled. Chromium sends requests through a temporary loopback proxy with its default loopback bypass disabled. The proxy checks every native redirect hop, including popup and worker requests, and blocks destinations outside the two selected origins. Service-worker registration is disabled. Approved WebSockets remain usable; off-target upgrades and opaque TLS tunnels are refused. The current remote font stylesheet is blocked and the UI uses system fonts. Browser cleanup also closes the proxy and its sockets.
 
-The seven browser-policy regressions assert zero requests/connections reach forbidden loopback endpoints through document/fetch/popup/worker redirects, service workers, HTTPS tunnels or page/worker WebSockets. They also verify allowed redirect URLs/cookies, interactive rendering, approved WebSockets and proxy listener cleanup. Playwright HTTP routes alone cannot enforce this boundary because they do not run again for redirected requests.
+The browser-policy regressions assert zero requests/connections reach forbidden loopback endpoints through document/fetch/popup/worker redirects, service workers, HTTPS tunnels or page/worker WebSockets. They also verify allowed redirect URLs/cookies, interactive rendering, approved WebSockets and proxy listener cleanup. Playwright HTTP routes alone cannot enforce this boundary because they do not run again for redirected requests.
 
 Repeated and parallel runs need no database reset. For example, after the setup above:
 
@@ -37,7 +37,7 @@ wait "$second_pid"
 
 Each process gets distinct storage and ports. Port allocation releases a temporary socket before server startup; another process can win that small race. Strict binding makes such a collision fail instead of silently selecting a different port. Retry the failed invocation. Parallel runs install/build separate dependency trees and need enough disk and memory.
 
-The runner stops and reaps child process groups and removes temporary application/D1 storage after success, failure, SIGINT or SIGTERM. Successful artifacts are removed. Failed logs, API/browser evidence, synthetic fixture IDs/titles and screenshots remain in ignored `test-results/run-*`; the path appears in the error output. CI uploads only logs, evidence, synthetic fixture JSON and screenshots on failure, never temporary database state. An uncatchable SIGKILL or machine failure can leave an OS temporary directory; remove the printed directory only after confirming its processes have stopped.
+The runner stops and reaps child process groups and removes temporary application/D1 storage after success, failure, SIGINT or SIGTERM. Successful artifacts are removed after one complete `VERIFIED_EVIDENCE` JSON record (maximum 64 KiB) is printed, preserving API/browser check results and the full application/blocked/error arrays in captured command logs. Oversized evidence fails instead of being truncated. Failed logs, API/browser evidence, synthetic fixture IDs/titles and screenshots remain in ignored `test-results/run-*`; the path appears in the error output. CI uploads only logs, evidence, synthetic fixture JSON and screenshots on failure, never temporary database state. An uncatchable SIGKILL or machine failure can leave an OS temporary directory; remove the printed directory only after confirming its processes have stopped.
 
 If setup fails, check that `npm run install:ci` works, the browser package was installed with `npm ci --prefix tests/browser`, Chromium/system libraries are available, and the OS temp directory has space. For readiness failures, inspect `dev.log` and `preview.log`. For assertion failures, inspect `api.log`, `browser.log`, evidence JSON and the browser failure screenshot. The runner never applies raw migrations to an existing development database.
 
@@ -73,15 +73,36 @@ TEST_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:browser-policy
 TEST_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:integration
 ```
 
-This only selects the browser binary. The locked Playwright package, mandatory
+The selector resolves to a regular executable file and is checked before framework allocation. This only selects the browser binary. The locked Playwright package, mandatory
 proxy, permitted origins and all redirect/WebSocket restrictions are unchanged.
 CI omits the selector and installs Playwright's pinned Chromium. Record the local
 browser version with test evidence when using this portability option.
 
 
 The proxy retains every blocked origin, including a system browser's own background
-software requests. Page/context external request origins are also recorded separately;
+software requests. Page/context and owned worker external request origins are also recorded separately;
 the UI regression keeps its strict font-only assertion against those application
 requests. Background traffic is still blocked and remains visible in evidence. The
 policy suite verifies real forbidden page redirects appear in application tracking
 while the forbidden server receives zero contacts.
+
+
+Worker request evidence uses public Chromium CDP over a harness-generated ephemeral
+loopback listener. Linux `/proc/net/tcp` and `tcp6` verification rejects every
+wildcard or non-loopback binding on that port before discovery. The discovered
+WebSocket URL must use the same IPv4 loopback address/port and browser protocol path;
+redirects are refused. Only the single owned test context's renderer/worker targets
+are observed. Targets pause until Network observation and recursive attachment are
+installed, then resume; command/session/message limits and timeouts fail the test
+and close the browser if observation breaks. A protocol delivery barrier precedes
+final evidence assertions. Application requests to the debugger port remain denied
+by the mandatory proxy. No user-provided debugger URLs, flags or launch options are
+accepted. The policy suite verifies worker-only forbidden WebSockets appear as
+`ws:` application origins, fail the strict font-only allowlist, and make zero
+forbidden contacts; it also covers actual wildcard-listener rejection.
+
+The managed host build can print `WARNING Proxy environment variables detected.
+We'll use your proxy for fetch requests.` This is expected host package/build
+network configuration; it is retained rather than bypassed. A successful build is
+not a claim of warning-free output or guest proxy inheritance. Docker runtime
+proxy fields remain explicitly empty and are verified by the execution suite.
