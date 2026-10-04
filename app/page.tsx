@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
+import { AuthorizationPanel } from "../components/execution/authorization-panel";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
@@ -767,6 +768,7 @@ export default function Home() {
                   ))}
                 </div>
               )}
+              {view === "board" && <AuthorizationPanel tickets={tickets} />}
               {view === "board" && (
                 <div className={"board " + (list ? "as-list" : "")}>
                   {Object.entries(statuses)

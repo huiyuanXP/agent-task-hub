@@ -174,3 +174,173 @@ Build output includes informational tooling messages: Wrangler detects the
 required session proxy, and Vinext reports that static analysis cannot classify
 some dynamic routes. The build succeeds; lint and TypeScript report no application
 diagnostics. Proxy settings and locked dependencies are preserved.
+
+## Owner authorization (#15)
+
+The dedicated **执行授权** panel on the Ticket board selects the actual
+owner-scoped server catalog for a specific Ticket revision. Planning fields such
+as `allowedActions` and free-text `budget` remain prose. They never create grants.
+The panel requests a separate pending authorization, then offers explicit owner
+approval, rejection and revocation. It shows the same effective status and audit
+entries returned by MCP. Preparing or approving never starts a process.
+
+The initial catalog contains exactly one operation, `ticket.validate.v1`.
+`lib/execution/catalog.mts` is shared Worker-safe code that produces the actual
+fixed Node argv consumed by the future supervisor. The pinned image is
+`node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c`.
+The command reads `input/ticket.json`, verifies its exact UTF-8 byte length and
+SHA-256, requires an object JSON Ticket and writes the declared bounded
+`output/result.json`. The artifact includes the verified input hash and a
+bounded title. Its definition hash covers operation identity/label, actual argv,
+image digest, exact input path/hash/size, declared artifact paths/limits and the
+execution policy. Approval never accepts client argv, image, policy or a hash
+invented by a client. Registry drift changes the catalog hash and invalidates
+an old grant without changing its stored descriptor.
+
+The policy has no network and no credentials. Ceilings are timeout 30,000 ms,
+memory 256 MiB, CPU 1, pids 64, total input 16 MiB and writable work tmpfs 64 MiB.
+The existing Ticket storage bound remains 80,000 Unicode code points.
+`{timeoutMs,memoryMb,cpus,pids}` must contain only finite positive numbers within
+the ceilings; all except CPU are safe integers. An approved budget may be
+reduced by a consumer, never enlarged. Exactly one operation binding
+`{operationId,definitionHash}` is supported per Run; approval cannot alter it.
+
+`prepareExecution` (also exported as `requestAuthorization`) generates both
+identities and writes the frozen queued Run plus pending grant in one real D1
+batch transaction. The conditional Run insert checks the owned Ticket's exact
+revision and raw body and active uniqueness. The grant insert selects that
+newly inserted Run; a grant/audit failure rolls back the whole batch. A failed
+request leaves no new Run or grant. Identical owner/request retries return the
+original pair even after Ticket changes; changes to revision, operation binding,
+budget, expiry, attempt or original actor return `REQUEST_CONFLICT`. JSON field
+ordering is normalized before identity is calculated. Owner/request collisions
+with older model-only Runs also conflict, never attach a grant to that Run.
+
+`execution_authorizations` retains immutable Run/Ticket binding, scope,
+budget, descriptor and expiry. SQL CAS controls pending→approved/rejected/revoked
+and approved→revoked. A trigger appends the decision audit in the same transaction
+as each request/decision, with stable decision ID, actor, owner, kind, grant,
+Run, time and normalized scope/budget. Audit update/delete and grant contract
+mutation/deletion are blocked by SQL triggers. Owner-wide unique decision IDs
+are idempotent for identical authorization/outcome/actor input. Opposing outcomes,
+changed actors, reused IDs on another grant and new IDs attempting a repeated
+state transition conflict. Audit failure leaves the decision unapplied.
+
+`AuthorizationContext.grantAuthority = "owner"` is a server-only capability,
+derived by authenticated owner HTTP/MCP adapters. A worker name or future lease
+never supplies it. Approve/reject/revoke require this capability. Context clock
+and administrator registry injection are trusted service inputs unavailable in
+request schemas. Domain methods copy caller inputs before asynchronous work.
+
+Effective statuses are `pending`, `approved`, `rejected`, `revoked`, `expired`,
+`stale_revision` and `stale_definition`. For pending/approved grants, missing or
+changed Ticket revision takes precedence, followed by expiry and definition
+drift; rejected/revoked decisions remain visible as recorded. Expiry is
+exclusive: `now >= expiresAt` denies starts/renewals. New requests choose a
+latest-start time within 24 hours. A future dispatch must persist an execution
+hard deadline no later than grant expiry or start plus approved timeout.
+Lease expiry is a separate credential boundary. Live `assertAuthorization`
+checks owner, exact Run/scope, reduced budget and nonterminal Run, and denies all
+ineffective grants. Its returned snapshot is a preflight check; future dispatch
+and renewal must also use atomic SQL guards at their write/permit boundary.
+
+Historical signed results that actually ended before the persisted execution
+deadline can later be reconciled by a fresh authorized owner/lease. They are
+checked against that original permit and deadline, never treated as a new start
+or rejected solely because delivery occurs after latest-start expiry. Expired
+leases cannot write results. Revocation prevents new permits/renewals and will
+request bounded cancellation of already permitted work when the backend is
+implemented. It does not prove instantaneous physical cancellation.
+
+An unusable pending/approved/rejected/revoked grant can leave its queued Run
+occupying the active Ticket slot. The panel exposes the existing version-CAS
+**取消 Run，允许重新申请** action, preserving the immutable old grant/audit and
+freeing the logical slot for a fresh revision-bound request. A terminal Run
+cannot exercise its recorded grant. Cancelling a queued model starts no process;
+physical execution cancellation is a distinct future backend confirmation.
+The panel persists preparation and decision request IDs in session storage before
+writes, so response loss and reloads retain retry identity. **重新设置申请**
+discards an unsent/failed local request after checking the server state; it cannot
+modify an existing grant. Local request copies are not authority.
+
+### Authorization HTTP and MCP
+
+`GET /api/authorization?ticketId=<id>&expectedRevision=<revision>` returns the
+owned catalog, real descriptor hashes and ceilings. `GET /api/authorization?id=<id>`
+returns `{authorization}` with immutable contract, effective status and audit.
+Duplicate/unknown query fields and ambiguous query combinations fail validation.
+All responses disable caching; POST uses the shared strict bounded JSON reader
+and requires the exact same Origin.
+
+POST actions are:
+
+- `prepare`: `{action,ticketId,expectedRevision,requestId,attempt,scope,budget,expiresAt}`;
+  returns `{run,authorization}` with status 201.
+- `decide`: `{action,authorizationId,decisionId,outcome:"approved"|"rejected"}`;
+  returns `{authorization}`.
+- `revoke`: `{action,authorizationId,decisionId}`; returns `{authorization}`.
+
+MCP tools `get_operation_catalog`, `prepare_execution`, `get_authorization`,
+`decide_authorization` and `revoke_authorization` call the same domain functions
+through a focused dispatcher. Published JSON schemas and runtime validators reject
+unknown/missing fields, malformed JSON values and invented grant authority.
+Domain errors retain their code/status in JSON-RPC error data. Browser MCP calls
+with an Origin must match the endpoint origin; programmatic MCP callers can omit
+Origin. Existing planning tools/events remain intact.
+
+| Function | Responsibility |
+| --- | --- |
+| `operationDescriptor(body, definition)` | Derive actual argv, manifest, artifacts, bounded policy and exact definition hash |
+| `getOperationCatalog(db, context, input)` | Owner/revision-scoped real catalog; never grants execution |
+| `snapshotContext(context)` | Freeze trusted owner/actor, clock and administrator registry |
+| `validateBudget`, `validateScope`, `validatePrepare`, `snapshotPrepare` | Runtime shape/limit checks and canonical input snapshots |
+| `prepareExecution` / `requestAuthorization` | Atomically reserve Run plus pending grant and request audit, with payload-sensitive retries |
+| `decideAuthorization(db, context, input)` | Owner-only approve/reject using state CAS and atomic immutable audit |
+| `revokeAuthorization(db, context, input)` | Owner-only revocation with stable decision identity |
+| `getAuthorization(db, context, id)` | Owned grant, effective status and immutable decisions |
+| `assertAuthorization(db, context, input)` | Single live grant preflight for future dispatch/lease consumers |
+| `handleAuthorizationRequest` | Strict shared HTTP read/catalog/prepare/decision/revoke boundary |
+| `dispatchExecutionTool` | Shared MCP execution-tool dispatcher, leaving planning behavior intact |
+| `AuthorizationPanel` | Catalog selection, explicit owner decisions, status/audit, reload-safe retries and logical Run cancellation |
+
+Migration `0003_minor_gorgon.sql` is additive; Drizzle schema/journal/snapshot
+are coherent. Native SQLite batch adaptation runs synchronously inside its
+transaction so overlapping async callers cannot interleave nested transactions.
+
+Task 2 acceptance uses real native SQLite for request/decision races across two
+connections, Run+grant/audit rollback, immutable storage, exclusive expiry,
+registry/revision invalidation, scope/budget enforcement and caller snapshots.
+The real catalog argv is executed with native Node, verifying the retained JSON
+artifact and rejecting changed input. HTTP/MCP tests exercise shared services
+against that storage. `node --experimental-strip-types tests/execution/authorization-worker.mjs`
+loads the built Worker with fresh D1 and static assets on loopback 5197, checks
+concurrent atomic preparation and shared owner decisions, then drives
+configured or Playwright-managed Chromium through
+pending/approve/revoke/reload/cancel/fresh-request/reject. It blocks all browser
+requests outside the loopback origin. The harness awaits `worker.ready` before
+HTTP and removes its synthetic database/runtime on completion.
+
+The browser test always runs; missing tooling or a missing Chromium executable
+fails with setup instructions before any Worker/D1 state is created. By default
+it loads `import("playwright")` and uses Playwright's installed Chromium. To keep
+application dependencies and the lockfile unchanged, install tooling in a new
+owned temporary directory outside the repository:
+
+```bash
+execution_tools=$(mktemp -d "${TMPDIR:-/tmp}/execution-browser-tools.XXXXXX")
+npm install --prefix "$execution_tools" --package-lock=false --no-save --no-audit --no-fund playwright@1.58.2
+PLAYWRIGHT_BROWSERS_PATH="$execution_tools/browsers" "$execution_tools/node_modules/.bin/playwright" install chromium
+EXECUTION_PLAYWRIGHT_MODULE="$execution_tools/node_modules/playwright/index.mjs" \
+PLAYWRIGHT_BROWSERS_PATH="$execution_tools/browsers" \
+node --experimental-strip-types tests/execution/authorization-worker.mjs
+```
+
+Run `npm run build` first and keep loopback port5197 free. Alternatively set
+`EXECUTION_CHROMIUM_PATH` to an installed system Chromium executable; then the
+Playwright browser download is unnecessary. `EXECUTION_PLAYWRIGHT_MODULE` accepts
+an explicit module file path/URL or an importable package specifier. Set optional
+`EXECUTION_BROWSER_SCREENSHOT` to a desired PNG path in an existing owned output
+directory to retain a screenshot; otherwise the test writes no screenshot.
+Browser/module/output paths have no dependency on the session workspace layout.
+Remove the tooling directory when finished; the harness automatically removes
+its own fresh runtime/database on both success and failure.

@@ -1,8 +1,8 @@
-export type ExecutionErrorCode = 'INVALID_INPUT' | 'NOT_FOUND' | 'REVISION_CONFLICT' | 'REQUEST_CONFLICT' | 'ACTIVE_RUN' | 'TRANSITION_CONFLICT' | 'INVALID_EVIDENCE' | 'BODY_TOO_LARGE' | 'UNSUPPORTED_MEDIA';
+export type ExecutionErrorCode = 'INVALID_INPUT' | 'NOT_FOUND' | 'REVISION_CONFLICT' | 'REQUEST_CONFLICT' | 'ACTIVE_RUN' | 'TRANSITION_CONFLICT' | 'INVALID_EVIDENCE' | 'BODY_TOO_LARGE' | 'UNSUPPORTED_MEDIA' | 'AUTHORIZATION_DENIED' | 'DECISION_CONFLICT' | 'STORAGE_UNAVAILABLE';
 export class ExecutionError extends Error {
   readonly code: ExecutionErrorCode;
-  readonly status: 400 | 404 | 409 | 413 | 415;
-  constructor(code: ExecutionErrorCode, message: string, status: 400 | 404 | 409 | 413 | 415) {
+  readonly status: 400 | 403 | 404 | 409 | 413 | 415 | 503;
+  constructor(code: ExecutionErrorCode, message: string, status: 400 | 403 | 404 | 409 | 413 | 415 | 503) {
     super(message);
     this.name = 'ExecutionError'; this.code = code; this.status = status;
   }

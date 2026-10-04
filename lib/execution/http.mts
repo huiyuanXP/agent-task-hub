@@ -3,7 +3,7 @@ import { createRun, getRun, listRuns, transitionRun } from './runs.mts';
 import { exactObject, ExecutionError, invalid } from './errors.mts';
 
 const headers = { 'Cache-Control': 'no-store' };
-async function readBody(request: Request): Promise<unknown> {
+export async function readBody(request: Request): Promise<unknown> {
   if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new ExecutionError('UNSUPPORTED_MEDIA', 'JSON required', 415);
   const length = request.headers.get('content-length');
   if (length !== null) {

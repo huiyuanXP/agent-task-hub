@@ -12,18 +12,20 @@ export function sqliteAdapter(sqlite) {
         bind(...args) { values = args; return statement; },
         async first() { return sqlite.prepare(sql).get(...values) ?? null; },
         async all() { return { results: sqlite.prepare(sql).all(...values) }; },
-        async run() {
+        execute() {
           const result = sqlite.prepare(sql).run(...values);
           return { meta: { changes: Number(result.changes) } };
         },
       };
+      statement.run = async () => statement.execute();
       return statement;
     },
     async batch(statements) {
       sqlite.exec('BEGIN IMMEDIATE');
       try {
         const results = [];
-        for (const statement of statements) results.push(await statement.run());
+        // No await inside the native transaction: concurrent batches cannot interleave.
+        for (const statement of statements) results.push(statement.execute());
         sqlite.exec('COMMIT');
         return results;
       } catch (error) { sqlite.exec('ROLLBACK'); throw error; }

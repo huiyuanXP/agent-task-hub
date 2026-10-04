@@ -19,6 +19,8 @@ import {
   signedPost,
   deliverJob,
 } from "../../lib/events";
+import { dispatchExecutionTool, executionTools } from "../../lib/execution/mcp.mts";
+import { ExecutionError } from "../../lib/execution/errors.mts";
 const object = (
   properties: Record<string, JsonSchema>,
   required: string[] = [],
@@ -145,6 +147,8 @@ function same(a: string, b: string) {
 export async function POST(req: Request) {
   let id: string | number | null = null;
   try {
+    if (req.headers.has("origin") && req.headers.get("origin") !== new URL(req.url).origin)
+      return Response.json({ error: "Invalid request origin" }, { status: 403 });
     const rpc = (await req.json()) as RpcRequest;
     id = rpc.id ?? null;
     const p = rpc.params || {},
@@ -181,7 +185,7 @@ export async function POST(req: Request) {
     if (method === "notifications/initialized")
       return new Response(null, { status: 202 });
     if (method === "ping") return respond({});
-    if (method === "tools/list") return respond({ tools });
+    if (method === "tools/list") return respond({ tools: [...tools, ...executionTools] });
     if (method === "events/list") return respond({ events: [eventDef] });
     const user = await getChatGPTUser();
     console.info(
@@ -318,6 +322,10 @@ export async function POST(req: Request) {
         id,
         error: { code: -32601, message: "Method not found" },
       });
+    const executionResult = await dispatchExecutionTool(db, { owner, actor: owner, grantAuthority: "owner" }, p.name as string, p.arguments);
+    if (executionResult !== undefined) return respond({
+      content: [{ type: "text", text: JSON.stringify(executionResult) }], structuredContent: executionResult, isError: false,
+    });
     let result: unknown;
     const a = p.arguments || {};
     if (p.name === "create_idea") {
@@ -570,7 +578,7 @@ export async function POST(req: Request) {
       isError: false,
     });
   } catch (e) {
-    console.error(e instanceof Error ? e.message : "MCP error");
+    if (!(e instanceof ExecutionError)) console.error(e instanceof Error ? e.message : "MCP error");
     return Response.json(
       {
         jsonrpc: "2.0",
@@ -578,6 +586,7 @@ export async function POST(req: Request) {
         error: {
           code: -32602,
           message: e instanceof Error ? e.message : "Request failed",
+          ...(e instanceof ExecutionError ? { data: { code: e.code, status: e.status } } : {}),
         },
       },
       { headers: { "Cache-Control": "no-store" } },
