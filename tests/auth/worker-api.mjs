@@ -13,7 +13,7 @@ const { privateKey, publicKey } = await generateKeyPair('RS256');
 const jwk = { ...await exportJWK(publicKey), kid: 'synthetic', alg: 'RS256', use: 'sig' };
 const now = Math.floor(Date.now() / 1000);
 const owner = sub => 'access:' + createHash('sha256').update(JSON.stringify([issuer, sub])).digest('hex');
-const token = (sub = 'alice', overrides = {}, key = privateKey) => new SignJWT({ type: 'app', email: `${sub}@example.test`, name: sub, iss: issuer, aud: audience, sub, iat: now, exp: now + 600, ...overrides }).setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid: 'synthetic' }).sign(key);
+const token = (sub = 'alice', overrides = {}, key = privateKey, kid = 'synthetic') => new SignJWT({ type: 'app', email: `${sub}@example.test`, name: sub, iss: issuer, aud: audience, sub, iat: now, exp: now + 600, ...overrides }).setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid }).sign(key);
 const alice = await token(); const bob = await token('bob');
 const settings = { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUDIENCE: audience, ACCESS_APPLICATION_ORIGIN: origin, ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]' };
 const spoof = { 'oai-authenticated-user-id': 'forged', 'oai-authenticated-user-email': 'forged@example.test' };
@@ -31,6 +31,8 @@ async function start(bindings = settings) {
       if (request.url !== issuer + '/cdn-cgi/access/certs') { unexpectedOutbound.push(request.url); return new Response('Denied', { status: 403 }); }
       if (outage === 'malformed') return new Response('not-json');
       if (outage === 'invalid-keys') return Response.json({ keys: 'invalid' });
+      if (outage === 'missing-exponent') { const key = { ...jwk }; delete key.e; return Response.json({ keys: [key] }); }
+      if (outage === 'invalid-exponent') return Response.json({ keys: [{ ...jwk, e: 17 }] });
       if (outage === 'timeout') await new Promise(resolve => setTimeout(resolve, 6000));
       return outage === true ? new Response('Unavailable', { status: 503 }) : Response.json({ keys: [jwk] });
     },
@@ -62,6 +64,7 @@ try {
   assert.equal(ui.headers.get('location'), '/signin-with-chatgpt?return_to=%2F%3Fview%3Dtickets');
   for (const invalid of [await token('alice', { aud: 'b'.repeat(64) }), await token('alice', { iss: 'https://wrong.cloudflareaccess.com' }), await token('alice', { exp: now - 1, iat: now - 100 }), await token('alice', { iat: now + 100 }), await token('alice', { nbf: now + 100 }), await token('alice', { type: 'service' }), await token('outsider'), await token('alice', {}, (await generateKeyPair('RS256')).privateKey), await new SignJWT({}).setProtectedHeader({ alg: 'HS256', typ: 'JWT' }).sign(new Uint8Array(32)), 'invalid']) await expect(401, '/api/session', { jwt: invalid });
   await expect(200, '/api/session', { jwt: null, headers: { 'cf-access-jwt-assertion': alice } });
+  await expect(401, '/api/session', { jwt: await token('alice', {}, privateKey, 'unknown') });
   await expect(401, '/api/session', { headers: { 'cf-access-jwt-assertion': bob } });
   await expect(403, '/api/session', { urlOrigin: 'https://alternate.example.test' });
   const create = (jwt, title) => expect(201, '/api/records', { jwt, body: { kind: 'ticket', status: 'todo', title } });
@@ -138,7 +141,7 @@ try {
   await expect(401, '/api/session', { jwt: short });
   console.log('PASS: verified owner isolation, protected API/UI/MCP/Run/authorization, session, CSRF, redirects and immediate logout revocation');
   // Fresh isolate removes the JWKS cache, modeling first-contact provider outage.
-  for (const unavailable of [true, 'malformed', 'invalid-keys', 'timeout']) {
+  for (const unavailable of ['missing-exponent', 'invalid-exponent', true, 'malformed', 'invalid-keys', 'timeout']) {
     outage = unavailable; await start();
     const response = await expect(503, '/api/session', { jwt: bob });
     assert.deepEqual(response.json, { error: 'Authentication unavailable' });

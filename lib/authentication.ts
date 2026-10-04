@@ -1,16 +1,6 @@
-import { errors as joseErrors } from 'jose';
 import type { ChatGPTUser } from '../app/chatgpt-auth';
-import { allowsSessionWrite, createAccessVerifier, parseAccessConfig, readAccessToken, safeAuthReturn } from './access-identity.mts';
+import { AccessProviderUnavailable, allowsSessionWrite, createAccessVerifier, parseAccessConfig, readAccessToken, safeAuthReturn } from './access-identity.mts';
 import { runWithAuthentication, type AuthenticationContext } from './auth-context';
-
-class ProviderUnavailable extends Error {}
-// Only the external fetch boundary becomes an availability error. Malformed
-// credentials and failed signatures/claims remain authentication failures.
-const providerFetch: typeof fetch = async (input, init) => {
-  try { return await fetch(input, init); }
-  catch { throw new ProviderUnavailable(); }
-};
-const unavailableCodes = new Set(['ERR_JOSE_GENERIC', 'ERR_JWKS_TIMEOUT', 'ERR_JWKS_INVALID', 'ERR_JWK_INVALID']);
 
 const cache = new Map<string, ReturnType<typeof createAccessVerifier>>();
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -74,15 +64,14 @@ export async function authenticateRequest(
       const key = JSON.stringify(config);
       let verify = cache.get(key);
       if (!verify) {
-        verify = createAccessVerifier(config, providerFetch);
+        verify = createAccessVerifier(config);
         if (cache.size >= 8) cache.delete(cache.keys().next().value!);
         cache.set(key, verify);
       }
       identity = await verify(credential.token);
     }
   } catch (error) {
-    return failure(error instanceof ProviderUnavailable ||
-      (error instanceof joseErrors.JOSEError && unavailableCodes.has(error.code)) ? 503 : 401);
+    return failure(error instanceof AccessProviderUnavailable ? 503 : 401);
   }
   if (!identity || !credential) {
     if ((request.method === 'GET' || request.method === 'HEAD') && !url.pathname.startsWith('/api/') && url.pathname !== '/mcp' && !url.pathname.startsWith('/cdn-cgi/')) {

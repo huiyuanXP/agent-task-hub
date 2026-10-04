@@ -1,4 +1,8 @@
-import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
+import { createRemoteJWKSet, customFetch, jwtVerify, errors as joseErrors } from 'jose';
+
+export class AccessProviderUnavailable extends Error {
+  constructor() { super('Access provider unavailable'); }
+}
 
 export interface AccessEnvironment {
   ACCESS_TEAM_DOMAIN?: string;
@@ -105,10 +109,21 @@ export function createAccessVerifier(config: AccessConfig, fetcher?: typeof fetc
     cooldownDuration: 60000,
     ...(fetcher ? { [customFetch]: fetcher } : {}),
   });
+  const resolveKey: (...args: Parameters<typeof jwks>) => ReturnType<typeof jwks> = async (...args) => {
+    try { return await jwks(...args); }
+    catch (error) {
+      // No matching key describes a credential the provider does not recognize.
+      // Preserve JOSE's candidate iteration for normal key rotation. All other
+      // retrieval/import failures describe unusable provider material, including
+      // WebCrypto DataError/TypeError that are not JOSEError subclasses.
+      if (error instanceof joseErrors.JWKSNoMatchingKey || error instanceof joseErrors.JWKSMultipleMatchingKeys) throw error;
+      throw new AccessProviderUnavailable();
+    }
+  };
   return async (token, now = new Date()) => {
     compactToken(token);
     if (!Number.isFinite(now.getTime())) return invalid();
-    const { payload, protectedHeader } = await jwtVerify(token, jwks, {
+    const { payload, protectedHeader } = await jwtVerify(token, resolveKey, {
       algorithms: ['RS256'], issuer: trusted.teamDomain, audience: trusted.audience,
       typ: 'JWT', requiredClaims: ['iss', 'aud', 'sub', 'exp', 'iat', 'email', 'type'],
       clockTolerance: 0, currentDate: now,
