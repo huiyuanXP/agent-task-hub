@@ -8,7 +8,7 @@ import { input } from './sqlite.mjs';
 
 const directory = mkdtempSync(join(tmpdir(), 'execution-worker-d1-'));
 const state = join(directory, 'd1');
-const base = 'http://127.0.0.1:5197';
+let base;
 let worker;
 let database;
 async function sql(query) { return (await database.prepare(query).all()).results; }
@@ -31,10 +31,11 @@ async function expectStatus(expected, path, options) {
 try {
   const config = JSON.parse(readFileSync('dist/server/wrangler.json', 'utf8'));
   worker = new Miniflare({
-    host: '127.0.0.1', port: 5197,
+    host: '127.0.0.1', port: 0,
     modulesRoot: 'dist/server',
     modules: [config.main, ...readdirSync('dist/server', { recursive: true }).filter(path => /\.m?js$/.test(path) && path !== config.main)]
       .map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
+    bindings: { AUTH_MODE: 'trusted-sites', AUTH_TRUST_SITES_HEADERS: '1' },
     compatibilityDate: config.compatibility_date,
     compatibilityFlags: config.compatibility_flags,
     d1Databases: { DB: '00000000-0000-4000-8000-000000000000' }, d1Persist: state,
@@ -51,7 +52,7 @@ try {
   const legacy = (await sql("SELECT * FROM records WHERE id='legacy-run'"))[0];
   const tableNames = (await sql("SELECT name FROM sqlite_master WHERE type='table'")).map(row => row.name);
   for (const table of ['records', 'jobs', 'subscriptions', 'execution_runs']) assert.ok(tableNames.includes(table));
-  await worker.ready;
+  base = (await worker.ready).origin;
   await expectStatus(401, '/api/execution', { owner: null });
   await expectStatus(403, '/api/execution', { body: { action: 'create', ...input }, headers: { origin: 'https://foreign.example' } });
   await expectStatus(409, '/api/execution', { body: { action: 'create', ...input, expectedRevision: 2 } });
