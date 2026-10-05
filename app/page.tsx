@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useRef, useCallback } from "react";
+import { PlanningStatus, planningControls } from "../components/planning-status";
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
 import type { FormEvent } from "react";
 import Link from "next/link";
@@ -106,6 +107,11 @@ export default function Home() {
       jobs: [],
       subscriptions: 0,
     });
+  const [planningNow, setPlanningNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setPlanningNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const [session, setSession] = useState<SessionState | null>(null);
   const [accountVersion, setAccountVersion] = useState(0);
   const sessionRef = useRef<SessionState | null>(null);
@@ -771,16 +777,19 @@ export default function Home() {
                         p.id === i.planId ||
                         (p.ideaId === i.id && p.ideaRevision === i.revision),
                     );
-                    const job = planning.jobs.find(
+                    const metadata = planning.jobs.find(
                       (j) =>
                         j.idea_id === i.id && j.idea_revision === i.revision,
-                    ) || {
+                    ) || i.planning;
+                    const job = {
                       status:
                         i.planningStatus === "planned"
                           ? "done"
                           : i.planningStatus || "unplanned",
                       delivery: i.planningDelivery,
+                      ...metadata,
                     };
+                    const controls = planningControls(job, planningNow);
                     return (
                       <article className="idea-card" key={i.id}>
                         <div className="card-top">
@@ -799,23 +808,7 @@ export default function Home() {
                           <h3>{i.title}</h3>
                         </button>
                         <p className="idea-text">{i.text}</p>
-                        {job && (
-                          <div className="planning-status">
-                            {job.status === "unplanned"
-                              ? "当前版本尚未规划，请求 Agent 开始整理"
-                              : job.status === "done"
-                                ? "规划完成 · 结果已保存"
-                                : job.status === "planning"
-                                  ? "Agent 正在规划"
-                                  : job.delivery === "accepted"
-                                    ? "请求已送达 · 等待 Agent 处理"
-                                    : job.delivery === "no_subscription"
-                                      ? "已排队 · 待连接插件"
-                                      : job.delivery === "failed"
-                                        ? "投递失败 · 可重试"
-                                        : "规划已排队"}
-                          </div>
-                        )}
+                        <PlanningStatus job={job} now={planningNow} />
                         <div className="idea-footer">
                           <button
                             className="text-btn"
@@ -834,18 +827,14 @@ export default function Home() {
                           </button>
                           <button
                             className="text-btn"
-                            disabled={saving || job?.status === "planning"}
+                            disabled={saving || controls.disabled}
                             onClick={() =>
                               job?.status === "done"
                                 ? openPlan(i)
                                 : requestPlan(i)
                             }
                           >
-                            {job?.status === "done"
-                              ? "查看结果"
-                              : job?.status === "planning"
-                                ? "Agent 正在处理"
-                                : "请求 Agent"}{" "}
+                            {controls.label}{" "}
                             <ArrowUpRight size={16} />
                           </button>
                         </div>

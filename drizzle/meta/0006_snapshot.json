@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "31156a32-66bd-4434-bb21-adf03878b91f",
-  "prevId": "af526895-5f6e-4f40-bbb4-a03aa1adf0cf",
+  "id": "a4d0cd1d-47e9-4258-b959-b452b8735fe9",
+  "prevId": "31156a32-66bd-4434-bb21-adf03878b91f",
   "tables": {
     "auth_revocations": {
       "name": "auth_revocations",
@@ -150,6 +150,76 @@
         "authorization_audit_kind": {
           "name": "authorization_audit_kind",
           "value": "\"authorization_audit\".\"kind\" IN ('requested','approved','rejected','revoked')"
+        }
+      }
+    },
+    "backend_attestations": {
+      "name": "backend_attestations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "permit_id": {
+          "name": "permit_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "receipt": {
+          "name": "receipt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "backend_attestations_permit_purpose": {
+          "name": "backend_attestations_permit_purpose",
+          "columns": [
+            "permit_id",
+            "purpose"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "backend_attestations_receipt": {
+          "name": "backend_attestations_receipt",
+          "value": "json_valid(\"backend_attestations\".\"receipt\") AND length(\"backend_attestations\".\"receipt\") <= 16000"
+        },
+        "backend_attestations_purpose": {
+          "name": "backend_attestations_purpose",
+          "value": "\"backend_attestations\".\"purpose\" IN ('result','cancel_fence','stop')"
         }
       }
     },
@@ -324,6 +394,125 @@
         "authorizations_expiry": {
           "name": "authorizations_expiry",
           "value": "\"execution_authorizations\".\"expires_at\" > \"execution_authorizations\".\"created_at\""
+        }
+      }
+    },
+    "execution_permits": {
+      "name": "execution_permits",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ticket_id": {
+          "name": "ticket_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authorization_id": {
+          "name": "authorization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "envelope": {
+          "name": "envelope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "envelope_hash": {
+          "name": "envelope_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deadline_ms": {
+          "name": "deadline_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cancel_requested": {
+          "name": "cancel_requested",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "execution_permits_run": {
+          "name": "execution_permits_run",
+          "columns": [
+            "owner",
+            "run_id"
+          ],
+          "isUnique": true
+        },
+        "execution_permits_physical_ticket": {
+          "name": "execution_permits_physical_ticket",
+          "columns": [
+            "owner",
+            "ticket_id"
+          ],
+          "isUnique": true,
+          "where": "\"execution_permits\".\"closed_at\" IS NULL"
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "execution_permits_envelope": {
+          "name": "execution_permits_envelope",
+          "value": "json_valid(\"execution_permits\".\"envelope\") AND length(\"execution_permits\".\"envelope\") <= 1048576"
+        },
+        "execution_permits_cancel": {
+          "name": "execution_permits_cancel",
+          "value": "\"execution_permits\".\"cancel_requested\" IN (0,1)"
+        },
+        "execution_permits_deadline": {
+          "name": "execution_permits_deadline",
+          "value": "\"execution_permits\".\"deadline_ms\" > \"execution_permits\".\"created_at\""
         }
       }
     },

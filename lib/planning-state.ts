@@ -6,22 +6,38 @@ import type {
   VisibleJob,
 } from "./types";
 import { database } from "./store";
-// Derive planning metadata from the authoritative revision-specific job. This
-// repairs historical rows without editing raw idea text or bumping its revision.
+import { planningMetadata } from "./planning-recovery";
+
+/** Public whitelist: internal job/event/claim storage must never cross a read API. */
+export async function visibleJob(
+  job: JobRow,
+  currentRevision: number,
+): Promise<VisibleJob> {
+  return {
+    id: job.id,
+    idea_id: job.idea_id,
+    idea_revision: job.idea_revision,
+    created: job.created,
+    result: job.result,
+    current_revision: currentRevision,
+    ...(await planningMetadata(job)),
+  };
+}
+
+// Derive current planning state without editing Idea text or bumping its revision.
 export async function ideaWithPlanning(row: RecordRow, owner: string) {
   const body = JSON.parse(row.body) as RecordBody;
   const job = await database()
-    .prepare(
-      "SELECT status,delivery,result FROM jobs WHERE owner=? AND idea_id=? AND idea_revision=?",
-    )
+    .prepare("SELECT * FROM jobs WHERE owner=? AND idea_id=? AND idea_revision=?")
     .bind(owner, row.id, row.revision)
-    .first<Pick<JobRow, "status" | "delivery" | "result">>();
+    .first<JobRow>();
+  const planning = job ? await planningMetadata(job) : null;
   let planId = "",
     ticketIds: string[] = [];
   if (job?.status === "done" && job.result) {
-    const r = JSON.parse(job.result) as PlanningResult;
-    planId = r.plan_id || "";
-    ticketIds = r.ticket_ids || [];
+    const result = JSON.parse(job.result) as PlanningResult;
+    planId = result.plan_id || "";
+    ticketIds = result.ticket_ids || [];
   }
   return {
     ...body,
@@ -30,27 +46,17 @@ export async function ideaWithPlanning(row: RecordRow, owner: string) {
     revision: row.revision,
     created: row.created,
     updated: row.updated,
-    planningStatus: planId
-      ? "planned"
-      : job?.status === "planning"
-        ? "planning"
-        : job
-          ? "queued"
-          : "unplanned",
+    planningStatus: planId ? "planned" : planning?.status || "unplanned",
     planId,
     ticketIds,
-    planningDelivery: job?.delivery || null,
+    planningDelivery: planning?.delivery || null,
+    planning,
   };
 }
 export async function visibleJobs(owner: string) {
   const { results } = await database()
-    .prepare(
-      "SELECT j.id,j.idea_id,j.idea_revision,j.status,j.delivery,j.created,j.result,i.revision AS current_revision FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner WHERE j.owner=? ORDER BY j.created DESC LIMIT 100",
-    )
+    .prepare("SELECT j.*,i.revision AS current_revision FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner AND i.kind='idea' WHERE j.owner=? ORDER BY j.created DESC LIMIT 100")
     .bind(owner)
-    .all<VisibleJob>();
-  return results.map((r) => ({
-    ...r,
-    status: r.idea_revision !== r.current_revision ? "superseded" : r.status,
-  }));
+    .all<JobRow & { current_revision: number }>();
+  return Promise.all(results.map(job => visibleJob(job, job.current_revision)));
 }

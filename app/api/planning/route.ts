@@ -1,8 +1,9 @@
 import type { RecordRow, RecordBody, JobRow } from "../../../lib/types";
-import { visibleJobs } from "../../../lib/planning-state";
+import { visibleJob, visibleJobs } from "../../../lib/planning-state";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { database } from "../../../lib/store";
 import { deliverJob, EVENT } from "../../../lib/events";
+import { retryPlanningJob } from "../../../lib/planning-recovery";
 export async function GET() {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "请登录" }, { status: 401 });
@@ -33,7 +34,15 @@ export async function POST(req: Request) {
   if (req.headers.get("origin") !== new URL(req.url).origin)
     return Response.json({ error: "请求来源无效" }, { status: 403 });
   try {
-    const { ideaId } = (await req.json()) as { ideaId: string };
+    let input: unknown;
+    try { input = await req.json(); }
+    catch { return Response.json({ error: "无效的规划请求" }, { status: 400 }); }
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        Object.keys(input).some(key => key !== "ideaId") ||
+        !("ideaId" in input) || typeof input.ideaId !== "string" ||
+        !input.ideaId.trim() || input.ideaId.length > 256)
+      return Response.json({ error: "无效的点子 ID" }, { status: 400 });
+    const { ideaId } = input;
     const db = database();
     const idea = await db
       .prepare("SELECT * FROM records WHERE id=? AND owner=? AND kind=?")
@@ -57,7 +66,7 @@ export async function POST(req: Request) {
     };
     await db
       .prepare(
-        "INSERT OR IGNORE INTO jobs (id,owner,idea_id,idea_revision,status,event,delivery,created) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO jobs (id,owner,idea_id,idea_revision,status,event,delivery,created) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND kind='idea' AND revision=?)",
       )
       .bind(
         id,
@@ -68,33 +77,21 @@ export async function POST(req: Request) {
         JSON.stringify(event),
         "pending",
         now,
+        idea.id,
+        user.userId,
+        idea.revision,
       )
       .run();
-    const current = await db
-      .prepare("SELECT * FROM jobs WHERE id=? AND owner=?")
-      .bind(id, user.userId)
-      .first<JobRow>();
-    if (!current) throw Error("Planning job unavailable");
-    if (current.status === "planning" && (current.lease ?? 0) > Date.now())
-      return Response.json({
-        job: { id, status: current.status, delivery: current.delivery },
-      });
-    if (current.status !== "done" && current.delivery === "accepted") {
-      event.eventId = "evt_" + crypto.randomUUID();
-      event.timestamp = new Date().toISOString();
-      await db
-        .prepare(
-          "UPDATE jobs SET event=?,status='queued',claim_token=NULL,lease=NULL,delivery='pending' WHERE id=? AND owner=? AND status!='done' AND (lease IS NULL OR lease<?)",
-        )
-        .bind(JSON.stringify(event), id, user.userId, Date.now())
-        .run();
-    }
+    const current = await retryPlanningJob(id, user.userId, db);
+    if (!current) return Response.json({ error: "点子版本已更新，请刷新后重试" }, { status: 409 });
     await deliverJob(id, user.userId);
     const job = await db
-      .prepare("SELECT id,status,delivery FROM jobs WHERE id=? AND owner=?")
+      .prepare("SELECT j.*,i.revision AS current_revision FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner AND i.kind='idea' WHERE j.id=? AND j.owner=?")
       .bind(id, user.userId)
-      .first<Pick<JobRow, "id" | "status" | "delivery">>();
-    return Response.json({ job });
+      .first<JobRow & { current_revision: number }>();
+    if (!job) throw Error("Planning job unavailable");
+    return Response.json({ job: await visibleJob(job, job.current_revision) },
+      { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     console.error(e);
     return Response.json(

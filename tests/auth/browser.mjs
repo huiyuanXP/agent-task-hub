@@ -91,13 +91,21 @@ try {
     await page.getByRole('dialog').getByRole('textbox').first().fill('Unsaved private draft');
   };
   const cleared = async (timeout = 7000) => {
-    await page.getByRole('link', { name: '登录', exact: true }).waitFor({ timeout });
-    assert.equal(await page.getByRole('dialog').count(), 0);
-    assert.equal(await page.getByRole('textbox', { name: '快速记录点子' }).inputValue(), '');
-    assert.equal(await page.getByText('Alice Member', { exact: true }).count(), 0);
-    assert.equal(await page.getByRole('heading', { name: 'Alice private idea', exact: true }).count(), 0);
-    assert.equal(await page.getByRole('button', { name: /点子收件箱/ }).innerText(), '点子收件箱\n0');
-    assert.equal(await page.getByRole('combobox', { name: '项目筛选', exact: true }).inputValue(), '全部项目');
+    // Observe one DOM version: a later, independently verified session may
+    // legitimately establish identity after the denial has cleared this state.
+    const snapshot = await page.waitForFunction(() => {
+      if (![...document.querySelectorAll('a')].some(node => node.textContent.trim() === '登录')) return false;
+      return {
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+        capture: document.querySelector('[aria-label="快速记录点子"]')?.value,
+        account: document.querySelector('[aria-label="当前账户"]')?.textContent ?? null,
+        aliceIdea: [...document.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(node => node.textContent.trim() === 'Alice private idea').length,
+        inbox: [...document.querySelectorAll('button')].find(node => node.textContent.includes('点子收件箱'))?.textContent.replace(/\s/g, ''),
+        project: document.querySelector('[aria-label="项目筛选"]')?.value,
+      };
+    }, undefined, { timeout });
+    assert.deepEqual(await snapshot.jsonValue(), { dialogs: 0, capture: '', account: null, aliceIdea: 0, inbox: '点子收件箱0', project: '全部项目' });
+    await snapshot.dispose();
   };
   await page.goto(base, { waitUntil: 'networkidle' });
   await visibleAlice();
@@ -213,9 +221,37 @@ try {
   console.log('PASS: real panel storage 503 retains verified account and prior Run/grant');
   for (const [path, button, status] of [['/api/authorization', '批准授权', 403], ['/api/execution', '取消 Run，允许重新申请', 401]]) {
     await openPanel(); panelFault = { path, method: 'POST', status };
+    // Hold successful session responses so the clearing assertion cannot race
+    // a newly authenticated periodic refresh. Also exercise an older session
+    // request that was verified before denial but has not reached the browser.
+    holdResponses(['/api/session']);
+    let staleSession;
+    if (status === 401) {
+      staleSession = page.waitForResponse(r => new URL(r.url()).pathname === '/api/session');
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await waitForHeld(1);
+    }
     const deniedWrite = panelDenial(); await panel.getByRole('button', { name: button }).click();
     await deniedWrite; await assertPanelCleared(); panelFault = undefined;
     console.log(`PASS: ${button} write denial clears workspace before response-body processing`);
+    if (staleSession) {
+      const releaseStale = releaseHeld;
+      holdResponses(['/api/session']); // Any later refresh remains separate.
+      releaseStale();
+      assert.equal((await staleSession).status(), 200);
+      // Allow fetch continuations and React's render to run, without a sleep.
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await assertPanelCleared();
+      console.log('PASS: pre-denial verified session response cannot restore identity or execution cache');
+      const newSession = page.waitForResponse(r => new URL(r.url()).pathname === '/api/session');
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await waitForHeld(1); hold = false; releaseHeld();
+      assert.equal((await newSession).status(), 200);
+      await visibleAlice();
+      assert.equal(await panel.count(), 0);
+      assert.equal(await page.getByText(prepared.run.id, { exact: false }).count(), 0);
+      console.log('PASS: newly initiated verified session restores identity without old execution cache');
+    } else { hold = false; releaseHeld(); }
   }
   for (const method of ['GET', 'POST']) {
     await openPanel(); panelFault = { path: '/api/execution', method, status: 401 }; holdResponses(['/api/execution']);
@@ -273,6 +309,10 @@ try {
   assert.ok(requests.some(r => r.path === '/api/session'));
   console.log('PASS: no page errors or unexpected outbound requests');
 } finally {
+  if (restricted) {
+    await restricted.flushNetworkEvidence();
+    console.log('AUTH_BROWSER_FINAL_NETWORK_EVIDENCE ' + JSON.stringify({ blockedExternalRequests: restricted.blocked, requestedExternalOrigins: restricted.requestedExternal, networkPolicyErrors: restricted.errors }));
+  }
   hold = false; releaseHeld?.(); await restricted?.close();
   facade.closeAllConnections(); if (facade.listening) await new Promise(resolve => facade.close(resolve));
   await worker?.dispose(); rmSync(temporary, { recursive: true, force: true });

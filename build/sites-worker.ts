@@ -4,7 +4,12 @@ import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
+import { scheduledPlanning } from "../lib/planning-recovery";
+
 export default {
+  async scheduled(_event: ScheduledController, env: Cloudflare.Env) {
+    await scheduledPlanning(env.DB);
+  },
   fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
     if (new URL(request.url).pathname === '/api/execution/checkpoint') return handleCheckpoint(request, env);
     let binding = ctx.props?.CONNECTORS;
