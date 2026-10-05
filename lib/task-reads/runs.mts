@@ -1,7 +1,7 @@
 import type { OperationDefinition } from '../execution/authorization-types.mts';
 import { validateScope, validateBudget } from '../execution/authorization-validation.mts';
 import { getAuthorization } from '../execution/authorization.mts';
-import { ExecutionError } from '../execution/errors.mts';
+import { ExecutionError, positiveInteger } from '../execution/errors.mts';
 import { sha256 } from '../execution/evidence.mts';
 import type { ExecutionDatabase } from '../execution/types.mts';
 import { decodeCursor, makePage, type CursorContext } from './cursor.mts';
@@ -33,7 +33,7 @@ async function authorizationDTO(db: ExecutionDatabase, owner: string, row: ReadR
     if (grant.runId !== row.id || grant.ticketId !== row.ticket_id || grant.ticketRevision !== row.ticket_revision) return null;
     const scope = grant.scope.map(({ operationId, definitionHash }) => ({ operationId, definitionHash }));
     const budget = { timeoutMs: grant.budget.timeoutMs, memoryMb: grant.budget.memoryMb, cpus: grant.budget.cpus, pids: grant.budget.pids };
-    try { validateScope(scope); validateBudget(budget); }
+    try { validateScope(scope); validateBudget(budget); positiveInteger(grant.expiresAt); }
     catch { throw new ExecutionError('STORAGE_UNAVAILABLE', 'Task storage unavailable', 503); }
     return { id: grant.id, run_id: grant.runId, ticket_id: grant.ticketId, ticket_revision: grant.ticketRevision,
       status: grant.status, effective_status: grant.effectiveStatus, expires_at: grant.expiresAt,

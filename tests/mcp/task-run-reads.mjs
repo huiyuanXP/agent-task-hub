@@ -126,10 +126,25 @@ try {
   await f.rawRun('dirty-run','dirty-grant',f.owners.alice,{state:'queued',authorization_id:'dirty-auth'});
   await f.db.prepare(`INSERT INTO execution_authorizations(id,owner,actor,run_id,ticket_id,ticket_revision,scope,budget,operations,expires_at,request_id,input_key,created_at,updated_at,last_decision_id,last_actor,decision_key)
     VALUES(?,?,?,?,?,1,?,?,?,?,?,?,1,1,?,?,?)`).bind('dirty-auth',f.owners.alice,'PRIVATE_ACTOR','dirty-run','dirty-grant',JSON.stringify([{operationId:{secret:'PRIVATE_SCOPE'},definitionHash:'a'.repeat(64),secret:'PRIVATE_SCOPE_EXTRA'}]),JSON.stringify({...budget,timeoutMs:{secret:'PRIVATE_BUDGET'},secret:'PRIVATE_BUDGET_EXTRA'}),'[{}]',2,'dirty-run','PRIVATE_INPUT','dirty-decision','PRIVATE_ACTOR','PRIVATE_DECISION').run();
+  // SQLite affinity permits TEXT/REAL and nonpositive expiry values with a lower created_at.
+  // Use valid bound grants so only expiry projection distinguishes these corrupt rows.
+  const malformedExpiries = ['PRIVATE_MALFORMED_EXPIRY', 1.5, Number.MAX_SAFE_INTEGER + 1, 0, -1];
+  for (const [i, expiresAt] of malformedExpiries.entries()) {
+    const ticketId = `expiry-ticket-${i}`, runId = `expiry-run-${i}`, authorizationId = `expiry-auth-${i}`;
+    await f.insert(ticketId, 'ticket', {});
+    await f.rawRun(runId, ticketId, f.owners.alice, { state: 'queued', authorization_id: authorizationId });
+    const catalog = await getOperationCatalog(f.db, f.context(), { ticketId, expectedRevision: 1 });
+    const scope = catalog.operations.map(({ operationId, definitionHash }) => ({ operationId, definitionHash }));
+    await f.db.prepare(`INSERT INTO execution_authorizations(id,owner,actor,run_id,ticket_id,ticket_revision,scope,budget,operations,expires_at,request_id,input_key,created_at,updated_at,last_decision_id,last_actor,decision_key)
+      VALUES(?,?,?,?,?,1,?,?,?,?,?,?,-2,-2,?,?,?)`).bind(authorizationId, f.owners.alice, 'PRIVATE_ACTOR', runId, ticketId,
+      JSON.stringify(scope), JSON.stringify(budget), JSON.stringify(catalog.operations), expiresAt, runId, 'PRIVATE_INPUT',
+      `expiry-decision-${i}`, 'PRIVATE_ACTOR', 'PRIVATE_DECISION').run();
+  }
   const beforeAuth=await f.snapshot();
   for(const name of ['pending','approved','expired','revoked','rejected','stale_revision','stale_definition']) {
     const run=value(await f.rpc('list_ticket_runs',{ticket_id:name})).items[0];
     assert.equal(run.authorization.effective_status,name); assert.equal(run.authorization.id,cases[name].authorization.id);
+    assert.equal(run.authorization.expires_at,cases[name].authorization.expiresAt);
     assert.deepEqual(Object.keys(run.authorization).sort(),['budget','effective_status','expires_at','id','run_id','scope','status','ticket_id','ticket_revision']);
     assert.deepEqual(run.authorization.budget,budget); assert.equal(run.contract.title,'Frozen '+name); assert.equal(run.ticket_revision,1);
     assert.doesNotMatch(JSON.stringify(run),/PRIVATE_|argv|inputs|decisions|input_key/);
@@ -150,6 +165,17 @@ try {
   for(const id of ['wrong-owner','wrong-ticket','wrong-receipt-owner']) assert.deepEqual(linked.find(r=>r.id===id).attestations,[]);
   const dirty=await f.rpc('list_ticket_runs',{ticket_id:'dirty-grant'});
   assert.deepEqual(dirty.error?.data,{code:'STORAGE_UNAVAILABLE',status:503});assert.doesNotMatch(JSON.stringify(dirty),/PRIVATE_/);
+  const expiryResponses = [];
+  for (const [i] of malformedExpiries.entries()) {
+    for (const name of ['list_ticket_runs', 'get_ticket']) {
+      const reply = await f.rpc(name, { ticket_id: `expiry-ticket-${i}` });
+      expiryResponses.push({ name, i, error: reply.error, leaksMarker: /PRIVATE_MALFORMED_EXPIRY/.test(JSON.stringify(reply)) });
+    }
+  }
+  assert.deepEqual(await f.snapshot(), beforeAuth, 'Malformed expiry reads also leave every user table unchanged');
+  assert.deepEqual(expiryResponses, malformedExpiries.flatMap((_, i) => ['list_ticket_runs', 'get_ticket'].map(name => ({
+    name, i, error: { code: -32602, message: 'Task storage unavailable', data: { code: 'STORAGE_UNAVAILABLE', status: 503 } }, leaksMarker: false,
+  }))));
   assert.deepEqual(await f.snapshot(),beforeAuth);
   console.log('PASS: actual effective grant states, frozen contracts, crypto-signed v1/v2 evidence and failed/cancel/stop history remain readonly');
 } finally {await f.close();}
