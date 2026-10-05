@@ -1,6 +1,6 @@
-import type { ExecutionDatabase } from './types.mts';
+import type { ExecutionDatabase, Run } from './types.mts';
 import type { AuthorizationContext } from './authorization-types.mts';
-import type { DispatchPermit } from './dispatch-types.mts';
+import type { DispatchPermit, PermitRow } from './dispatch-types.mts';
 import type { BackendAttestation } from './attestations.mts';
 import { backendConfiguration, importSigning, importTrust, configuredRegistry, assertDistinctKeyMaterial, type BackendEnvironment } from './backend-config.mts';
 import { boundedText, ReplayWindow, signReply, signedFetch, verifyRequest, type Signed, type TransportClaims } from './transport.mts';
@@ -25,21 +25,61 @@ export async function handleCheckpoint(request:Request,env:BackendEnvironment):P
   }catch{status=503;data={error:'Checkpoint unavailable'};}
   const text=JSON.stringify(data);return new Response(text,{status,headers:{...headers,'Content-Type':'application/json','x-execution-signature':JSON.stringify(await signReply(signing,signed,status,text))}});
 }
-export async function reconcileBackend(db:ExecutionDatabase,context:AuthorizationContext,env:BackendEnvironment,runId:string){
-  const run=await getRun(db,context.owner,runId);const p=await permitForRun(db,context.owner,runId);
-  if(!p)return {run,backend:null};
-  const config=await backendConfiguration(env),permit=JSON.parse(p.envelope) as DispatchPermit;
-  if(p.cancel_requested&&!p.closed_at){const cancel=await signedFetch(config.transport,'/cancel',{permit});if(cancel.status!==200)throw Error('Cancellation transport unavailable');for(const receipt of (cancel.data as {receipts:BackendAttestation[]}).receipts)await ingestAttestation(db,{...context,evidenceTrust:config.evidenceTrust},receipt);}
-  const response=await signedFetch(config.transport,'/result',{permit});
-  if(response.status===404)return {run:await getRun(db,context.owner,runId),backend:{phase:'dispatch_pending',receipts:[]}};
-  if(response.status!==200)throw Error('Backend unavailable');
-  const result=response.data as {backendId:string;phase:string;receipts:BackendAttestation[]};
-  if(!Array.isArray(result.receipts)||result.receipts.length>3)throw Error('Invalid backend result');
-  for(const receipt of result.receipts)await ingestAttestation(db,{...context,evidenceTrust:config.evidenceTrust},receipt);
-  if(result.phase==='running'){
-    const current=await getRun(db,context.owner,runId);if(['queued','waiting'].includes(current.state)){try{await transitionRun(db,context,{id:runId,expectedVersion:current.version,to:'running'});}catch(error){if(!(error instanceof ExecutionError)||error.code!=='TRANSITION_CONFLICT')throw error;}}
+type BackendResult = { backendId?: string; phase: string; receipts: BackendAttestation[] };
+
+/** Reconcile one immutable permit; only ingestAttestation can close its reservation. */
+async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, run: Run, row: PermitRow) {
+  const config = await backendConfiguration(env);
+  const permit = JSON.parse(row.envelope) as DispatchPermit;
+  const evidenceContext = { ...context, evidenceTrust: config.evidenceTrust };
+  if (row.cancel_requested && row.closed_at === null) {
+    const cancel = await signedFetch(config.transport, '/cancel', { permit });
+    if (cancel.status !== 200) throw Error('Cancellation transport unavailable');
+    const { receipts } = cancel.data as BackendResult;
+    if (!Array.isArray(receipts) || receipts.length > 3) throw Error('Invalid cancellation result');
+    for (const receipt of receipts) await ingestAttestation(db, evidenceContext, receipt);
   }
-  return {run:await getRun(db,context.owner,runId),backend:result};
+  const response = await signedFetch(config.transport, '/result', { permit });
+  if (response.status === 404) {
+    return { run: await getRun(db, context.owner, run.id), backend: { phase: 'dispatch_pending', receipts: [] } as BackendResult };
+  }
+  if (response.status !== 200) throw Error('Backend unavailable');
+  const result = response.data as BackendResult;
+  if (!Array.isArray(result.receipts) || result.receipts.length > 3) throw Error('Invalid backend result');
+  for (const receipt of result.receipts) await ingestAttestation(db, evidenceContext, receipt);
+  if (result.phase === 'running') {
+    const current = await getRun(db, context.owner, run.id);
+    if (['queued', 'waiting'].includes(current.state)) {
+      try { await transitionRun(db, context, { id: run.id, expectedVersion: current.version, to: 'running' }); }
+      catch (error) {
+        if (!(error instanceof ExecutionError) || error.code !== 'TRANSITION_CONFLICT') throw error;
+      }
+    }
+  }
+  return { run: await getRun(db, context.owner, run.id), backend: result };
+}
+
+/** A prepared successor can recover its terminal predecessor across UI reloads. */
+async function reconcileTicketReservation(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, run: Run) {
+  // The unique physical-Ticket index bounds this to one owned occupying permit.
+  const occupied = await db.prepare(`SELECT p.* FROM execution_permits p
+    JOIN execution_runs r ON r.owner=p.owner AND r.id=p.run_id
+    WHERE p.owner=? AND p.ticket_id=? AND p.run_id<>? AND p.closed_at IS NULL
+      AND r.state IN ('succeeded','failed','cancelled') LIMIT 1`)
+    .bind(context.owner, run.ticketId, run.id).first<PermitRow>();
+  if (!occupied) return;
+  const predecessor = await getRun(db, context.owner, occupied.run_id);
+  await reconcilePermit(db, context, env, predecessor, occupied);
+}
+
+export async function reconcileBackend(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, runId: string) {
+  const run = await getRun(db, context.owner, runId);
+  const permit = await permitForRun(db, context.owner, runId);
+  if (!permit) {
+    await reconcileTicketReservation(db, context, env, run);
+    return { run: await getRun(db, context.owner, runId), backend: null };
+  }
+  return reconcilePermit(db, context, env, run, permit);
 }
 export async function handleBackendRequest(db:ExecutionDatabase,context:AuthorizationContext|null,request:Request,env:BackendEnvironment):Promise<Response>{
   if(!context)return Response.json({error:'Authentication required'},{status:401,headers});
@@ -52,18 +92,33 @@ export async function handleBackendRequest(db:ExecutionDatabase,context:Authoriz
     if(request.method!=='POST')return Response.json({error:'Method not allowed'},{status:405,headers});
     if(request.headers.get('origin')!==new URL(request.url).origin)return Response.json({error:'Invalid request origin'},{status:403,headers});
     const input=await readBody(request);exactObject(input,['action','runId','kind','path']);boundedId(input.runId);
-    if(input.action==='start'){
-      exactObject(input,['action','runId']);context={...context,registry:configuredRegistry(env)};const config=await backendConfiguration(env);const permit=await createDispatchPermit(db,context,input.runId);
-      // A retry keeps the immutable permit/deadline; a persisted cancel intent
-      // sends a fence instead of attempting another start.
-      const row=await permitForRun(db,context.owner,input.runId);if(row?.cancel_requested)return Response.json(await reconcileBackend(db,context,env,input.runId),{headers});
-      const result=await signedFetch(config.transport,'/start',{permit});if(result.status!==202)throw new ExecutionError('DISPATCH_CONFLICT','Backend rejected the persisted dispatch',409);
-      return Response.json({run:await getRun(db,context.owner,input.runId),backend:result.data},{status:202,headers});
+    if (input.action === 'start') {
+      exactObject(input, ['action', 'runId']);
+      context = { ...context, registry: configuredRegistry(env) };
+      const config = await backendConfiguration(env);
+      const run = await getRun(db, context.owner, input.runId);
+      if (!await permitForRun(db, context.owner, run.id)) {
+        await reconcileTicketReservation(db, context, env, run);
+      }
+      // Reservation recovery does not grant start authority. The same atomic
+      // permit insert still checks this Run's current authorization and Ticket.
+      const permit = await createDispatchPermit(db, context, run.id);
+      const row = await permitForRun(db, context.owner, run.id);
+      if (row?.cancel_requested) {
+        return Response.json(await reconcileBackend(db, context, env, run.id), { headers });
+      }
+      const result = await signedFetch(config.transport, '/start', { permit });
+      if (result.status !== 202) throw new ExecutionError('DISPATCH_CONFLICT', 'Backend rejected the persisted dispatch', 409);
+      return Response.json({ run: await getRun(db, context.owner, run.id), backend: result.data }, { status: 202, headers });
     }
-    if(input.action==='cancel'){
-      exactObject(input,['action','runId']);const run=await getRun(db,context.owner,input.runId);if(['queued','running','waiting'].includes(run.state))await transitionRun(db,context,{id:run.id,expectedVersion:run.version,to:'cancelled'});
-      await requestPermitCancellation(db,context.owner,input.runId);
-      return Response.json(await reconcileBackend(db,context,env,input.runId),{headers});
+    if (input.action === 'cancel') {
+      exactObject(input, ['action', 'runId']);
+      const run = await getRun(db, context.owner, input.runId);
+      if (['queued', 'running', 'waiting'].includes(run.state)) {
+        await transitionRun(db, context, { id: run.id, expectedVersion: run.version, to: 'cancelled' });
+      }
+      await requestPermitCancellation(db, context.owner, run.id);
+      return Response.json(await reconcileBackend(db, context, env, run.id), { headers });
     }
     if(input.action==='content'){
       const config=await backendConfiguration(env);

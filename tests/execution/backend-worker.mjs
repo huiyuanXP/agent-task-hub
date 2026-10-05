@@ -11,6 +11,7 @@ import { chromium } from '../browser/node_modules/playwright/index.mjs';
 import { launchRestrictedBrowser } from '../browser/network.mjs';
 import { freePort } from '../harness.mjs';
 import { REGISTERED_OPERATIONS } from '../../lib/execution/registry.mts';
+import { signedFetch } from '../../lib/execution/transport.mts';
 import { startSupervisor } from '../../runner/server.mjs';
 import { cleanupFixture } from './fixtures/cleanup.mjs';
 const origin='https://hub.example.test',issuer='https://backend-team.cloudflareaccess.com',audience='c'.repeat(64);
@@ -18,7 +19,7 @@ const {privateKey,publicKey}=await generateKeyPair('RS256');const jwk={...await 
 const token=async sub=>new SignJWT({type:'app',email:sub+'@example.test',name:sub}).setProtectedHeader({alg:'RS256',kid:'synthetic',typ:'JWT'}).setIssuer(issuer).setAudience(audience).setSubject(sub).setIssuedAt().setExpirationTime('10m').sign(privateKey);
 const alice=await token('alice'),bob=await token('bob');let current=alice,worker,supervisor,browser,base;
 const temporary=await mkdtemp(join(tmpdir(),'backend-worker-'));const runnerPort=await freePort(),runnerUrl='http://127.0.0.1:'+runnerPort;
-const errors=[],outbound=[],transportFailures=[];let dropCancel=false,holdPoll=false,releasePoll=()=>{},pollGate;
+const errors=[],outbound=[],transportFailures=[];let dropCancel=false,heldRunId=null,holdPoll=false,releasePoll=()=>{},pollGate;
 async function pair(keyId){const k=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);return {signing:{keyId,privateKey:k.privateKey},trust:{keyId,key:k.publicKey},private:JSON.stringify({keyId,jwk:await crypto.subtle.exportKey('jwk',k.privateKey)}),public:JSON.stringify({keyId,jwk:await crypto.subtle.exportKey('jwk',k.publicKey)})};}
 const control=await pair('control'),node=await pair('supervisor'),evidence=await pair('evidence');
 const registry=[...REGISTERED_OPERATIONS,{...REGISTERED_OPERATIONS[0],operationId:'large.artifact',label:'Large retained artifact',argv:['node','-e','require("fs").writeFileSync("output/large.bin",Buffer.alloc(1048576,90))'],inputs:[],artifacts:[{path:'output/large.bin',maxBytes:1048576}]},{...REGISTERED_OPERATIONS[0],operationId:'slow.revoke',label:'Revocable operation',argv:['node','-e','process.stdout.write("actual interrupted output");setTimeout(()=>{},60000)'],inputs:[],artifacts:[]}];
@@ -32,7 +33,7 @@ try{
  worker=new Miniflare({host:'127.0.0.1',port:0,modulesRoot:'dist/server',modules:[config.main,...(await readdir('dist/server',{recursive:true})).filter(p=>/\.m?js$/.test(p)&&p!==config.main)].map(path=>({type:'ESModule',path:join('dist/server',path)})),compatibilityDate:config.compatibility_date,compatibilityFlags:config.compatibility_flags,
   bindings:{ACCESS_TEAM_DOMAIN:issuer,ACCESS_AUDIENCE:audience,ACCESS_APPLICATION_ORIGIN:origin,ACCESS_ALLOWED_EMAILS:'["alice@example.test","bob@example.test"]',EXECUTION_REGISTRY:JSON.stringify(registry),EXECUTION_RUNNER_URL:runnerUrl,EXECUTION_RUNNER_AUDIENCE:'runner',EXECUTION_CHECKPOINT_AUDIENCE:'control',EXECUTION_CONTROL_KEY:control.private,EXECUTION_RUNNER_KEY:node.public,EXECUTION_EVIDENCE_KEY:evidence.public},
   d1Databases:{DB:'00000000-0000-4000-8000-000000000000'},d1Persist:join(temporary,'d1'),assets:{directory:'dist/client',binding:'ASSETS',routerConfig:{has_user_worker:true,invoke_user_worker_ahead_of_assets:false}},
-  outboundService:async request=>{if(request.url===issuer+'/cdn-cgi/access/certs')return Response.json({keys:[jwk]});if(new URL(request.url).origin===runnerUrl&&new URL(request.url).pathname==='/cancel'&&dropCancel){transportFailures.push({path:'/cancel',status:503});return new Response('Synthetic transport outage',{status:503});}if(new URL(request.url).origin===runnerUrl)return fetch(request.url,{method:request.method,headers:Object.fromEntries(request.headers),body:await request.text(),redirect:'error'});outbound.push(request.url);return new Response('Denied',{status:403});}});
+  outboundService:async request=>{if(request.url===issuer+'/cdn-cgi/access/certs')return Response.json({keys:[jwk]});if(new URL(request.url).origin===runnerUrl&&new URL(request.url).pathname==='/cancel'&&dropCancel){transportFailures.push({path:'/cancel',status:503});return new Response('Synthetic transport outage',{status:503});}if(new URL(request.url).origin===runnerUrl){const body=await request.text();if(heldRunId&&['/cancel','/result'].includes(new URL(request.url).pathname)&&JSON.parse(body).permit?.runId===heldRunId){transportFailures.push({path:new URL(request.url).pathname,status:503,heldRunId});return new Response('Held predecessor stop delivery',{status:503});}return fetch(request.url,{method:request.method,headers:Object.fromEntries(request.headers),body,redirect:'error'});}outbound.push(request.url);return new Response('Denied',{status:403});}});
  await worker.ready;const db=await worker.getD1Database('DB');for(const name of (await readdir('drizzle')).filter(n=>n.endsWith('.sql')).sort())for(const sql of (await readFile(join('drizzle',name),'utf8')).split('--> statement-breakpoint').filter(s=>s.trim()))await db.prepare(sql).run();
  const supervisorConfig={registry,root:join(temporary,'supervisor'),port:runnerPort,audience:'runner',controlTrust:control.trust,transportKey:node.signing,evidenceKey:evidence.signing,checkpoint:{baseUrl:base,audience:'control',direction:'runner-to-control',signing:node.signing,trust:control.trust}};supervisor=await startSupervisor(supervisorConfig);
  const owner='access:'+createHash('sha256').update(JSON.stringify([issuer,'alice'])).digest('hex'),now=new Date().toISOString();
@@ -60,7 +61,29 @@ try{
  await page.reload();await page.getByRole('button',{name:/Ticket 看板/}).click();await panel.getByLabel('授权 Ticket').selectOption('ticket-ui-cancel');await panel.getByText(/Run .* · running ·/).waitFor({timeout:20000});
  dropCancel=true;holdPoll=true;pollGate=new Promise(r=>releasePoll=r);const failedCancel=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/execution/dispatch'&&r.request().method()==='POST'&&r.status()===503);
  await panel.getByRole('button',{name:'取消 Run，允许重新申请'}).click();await failedCancel;await panel.getByText(/Run .* · cancelled ·/).waitFor({timeout:1000});await panel.getByText(/尚未确认物理停止/).waitFor({timeout:1000});assert.ok(transportFailures.length);assert.equal((await api('/api/execution?id='+uiCancel.run.id)).data.run.state,'cancelled');assert.equal((await db.prepare('SELECT cancel_requested,closed_at FROM execution_permits WHERE run_id=?').bind(uiCancel.run.id).first()).cancel_requested,1);
- holdPoll=false;releasePoll();dropCancel=false;await completed(uiCancel.run.id);console.log('Owner UI retains committed cancellation with stop unconfirmed despite lost transport and held domain polls');
+ heldRunId=uiCancel.run.id;holdPoll=false;releasePoll();dropCancel=false;
+ console.log('Owner UI retains committed cancellation with stop unconfirmed despite lost transport and held domain polls');
+ // Prepare B while A is terminal but its actual stop cannot reach D1. Reload
+ // must retain a recovery path without the operator manually addressing A.
+ await panel.getByLabel('执行操作').selectOption('ticket.validate.v1');
+ await panel.getByRole('button',{name:'请求执行授权'}).click();await panel.getByText('pending',{exact:true}).waitFor();
+ await panel.getByRole('button',{name:'批准授权'}).click();await panel.getByText('approved',{exact:true}).waitFor();
+ const nextRun=await db.prepare('SELECT id FROM execution_runs WHERE ticket_id=? AND attempt=2').bind('ticket-ui-cancel').first();assert.ok(nextRun);
+ await page.reload();await page.getByRole('button',{name:/Ticket 看板/}).click();await panel.getByLabel('授权 Ticket').selectOption('ticket-ui-cancel');await panel.getByText('approved',{exact:true}).waitFor();assert.ok((await panel.innerText()).includes(nextRun.id));
+ assert.ok([409,503].includes((await api('/api/execution/dispatch',{action:'start',runId:nextRun.id})).status));
+ assert.equal(await db.prepare('SELECT id FROM execution_permits WHERE run_id=?').bind(nextRun.id).first(),null);
+ const priorPermit=await db.prepare('SELECT envelope,closed_at FROM execution_permits WHERE run_id=?').bind(uiCancel.run.id).first();assert.equal(priorPermit.closed_at,null);
+ const direct={baseUrl:runnerUrl,audience:'runner',direction:'control-to-runner',signing:control.signing,trust:node.trust};let stoppedPrior;
+ const stopUntil=Date.now()+20000;while(Date.now()<stopUntil){stoppedPrior=await signedFetch(direct,'/result',{permit:JSON.parse(priorPermit.envelope)});if(stoppedPrior.data.receipts.some(r=>r.claims.purpose==='stop'))break;await new Promise(r=>setTimeout(r,100));}
+ assert.ok(stoppedPrior.data.receipts.some(r=>r.claims.purpose==='stop'),'Actual supervisor must retain stop while Worker delivery is held');
+ assert.equal((await db.prepare('SELECT closed_at FROM execution_permits WHERE run_id=?').bind(uiCancel.run.id).first()).closed_at,null);
+ heldRunId=null;
+ const refreshed=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/execution/dispatch'&&new URL(r.url()).searchParams.get('runId')===nextRun.id&&r.status()===200);
+ await panel.getByRole('button',{name:'刷新授权状态'}).click();await refreshed;
+ assert.notEqual((await db.prepare('SELECT closed_at FROM execution_permits WHERE run_id=?').bind(uiCancel.run.id).first()).closed_at,null,'Polling B must ingest the occupying predecessor stop');
+ await panel.getByRole('button',{name:'启动已批准的执行'}).click();await panel.getByText(/实际结果：succeeded/).waitFor({timeout:40000});
+ assert.equal((await api('/api/execution?id='+nextRun.id)).data.run.state,'succeeded');assert.equal((await api('/api/execution?id='+uiCancel.run.id)).data.run.state,'cancelled');
+ console.log('Prepared successor survives reload and recovers the predecessor physical reservation only after verified actual stop');
  current=bob;await page.reload();await page.getByRole('button',{name:/Ticket 看板/}).click();assert.equal(await page.getByText(runId,{exact:false}).count(),0);
  await browser.flushNetworkEvidence();assert.deepEqual(browser.errors,[]);assert.deepEqual([...new Set(browser.requestedExternal)].filter(x=>!['https://fonts.googleapis.com','https://fonts.gstatic.com'].includes(x)),[]);assert.deepEqual(errors,[]);assert.deepEqual(outbound,[]);
  await mkdir('test-results',{recursive:true});await writeFile('test-results/backend-browser-evidence.json',JSON.stringify({blocked:browser.blocked,requestedExternal:browser.requestedExternal,errors},null,2));

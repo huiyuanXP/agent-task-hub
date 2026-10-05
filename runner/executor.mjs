@@ -69,9 +69,54 @@ export async function createExecutor(journal,config,registry) {
   async function resolve(input,newStart=false){const permit=await validatePermit(input,registry,newStart);const id=workspaceId(permit);const job=journal.jobs.get(id);if(job&&canonical(job.permit)!==canonical(permit))throw errorStatus('Execution identity payload conflict');return {permit,id,job};}
   const freshJob=(permit,id)=>({version:1,backendId:id,permit,phase:'accepted',fenced:false,cancelReason:null,workspace:null,process:null,startedAt:null,endedAt:null,capturedAt:null,exitCode:null,stdout:null,stderr:null,artifacts:[],receipts:[]});
   return {
-    async start(input){const {permit,id}=await resolve(input,false);let launch=false;const job=await journal.transaction(async()=>{const current=journal.jobs.get(id);if(current){if(canonical(current.permit)!==canonical(permit))throw errorStatus('Execution identity payload conflict');if(current.fenced)throw errorStatus('Execution identity cancelled');return current;}if(closing||journal.jobs.size>=64||[...journal.jobs.values()].filter(j=>j.phase!=='closed').length>=8)throw errorStatus('Admission capacity unavailable',503);await validatePermit(permit,registry,true);const created=freshJob(permit,id);journal.jobs.set(id,created);await journal.save(created);launch=true;return created;});if(launch)schedule(job);return {backendId:id,phase:job.phase};},
-    async cancel(input){const {permit,id}=await resolve(input);const job=await journal.transaction(async()=>{let job=journal.jobs.get(id);if(job&&canonical(job.permit)!==canonical(permit))throw errorStatus('Execution identity payload conflict');if(!job){if(journal.jobs.size>=64)throw errorStatus('Fence capacity unavailable',503);job=freshJob(permit,id);journal.jobs.set(id,job);}job.fenced=true;job.cancelReason='requested';await journal.save(job);return job;});await attest(job,'cancel_fence',{status:'cancelled'});if(!tasks.has(id))await cleanup(job);else if(job.workspace)await cleanupWorkspace(job.workspace);return journal.transaction(()=>structuredClone({backendId:id,receipts:job.receipts}));},
-    async result(input){const {job}=await resolve(input);if(!job)throw errorStatus('Execution not admitted',404);if(job.phase==='cleanup_pending'&&!tasks.has(job.backendId))await cleanup(job);return journal.transaction(()=>structuredClone({backendId:job.backendId,phase:job.phase,receipts:job.receipts}));},
+    async start(input) {
+      const { permit, id } = await resolve(input, false);
+      let launch = false;
+      const job = await journal.transaction(async () => {
+        const current = journal.jobs.get(id);
+        if (current) {
+          if (canonical(current.permit) !== canonical(permit)) throw errorStatus('Execution identity payload conflict');
+          if (current.fenced) throw errorStatus('Execution identity cancelled');
+          return current;
+        }
+        const activeJobs = [...journal.jobs.values()].filter(job => job.phase !== 'closed').length;
+        if (closing || journal.jobs.size >= 64 || activeJobs >= 8) throw errorStatus('Admission capacity unavailable', 503);
+        await validatePermit(permit, registry, true);
+        const created = freshJob(permit, id);
+        journal.jobs.set(id, created);
+        await journal.save(created);
+        launch = true;
+        return created;
+      });
+      if (launch) schedule(job);
+      return { backendId: id, phase: job.phase };
+    },
+    async cancel(input) {
+      const { permit, id } = await resolve(input);
+      const job = await journal.transaction(async () => {
+        let current = journal.jobs.get(id);
+        if (current && canonical(current.permit) !== canonical(permit)) throw errorStatus('Execution identity payload conflict');
+        if (!current) {
+          if (journal.jobs.size >= 64) throw errorStatus('Fence capacity unavailable', 503);
+          current = freshJob(permit, id);
+          journal.jobs.set(id, current);
+        }
+        current.fenced = true;
+        current.cancelReason = 'requested';
+        await journal.save(current);
+        return current;
+      });
+      await attest(job, 'cancel_fence', { status: 'cancelled' });
+      if (!tasks.has(id)) await cleanup(job);
+      else if (job.workspace) await cleanupWorkspace(job.workspace);
+      return journal.transaction(() => structuredClone({ backendId: id, receipts: job.receipts }));
+    },
+    async result(input) {
+      const { job } = await resolve(input);
+      if (!job) throw errorStatus('Execution not admitted', 404);
+      if (job.phase === 'cleanup_pending' && !tasks.has(job.backendId)) await cleanup(job);
+      return journal.transaction(() => structuredClone({ backendId: job.backendId, phase: job.phase, receipts: job.receipts }));
+    },
     async content(input,kind,path){const {job}=await resolve(input);if(!job?.workspace)throw errorStatus('Retained content unavailable',404);const receipt=await journal.transaction(()=>structuredClone(job.receipts.find(r=>r.claims.purpose==='result')));if(!receipt)throw errorStatus('Result not retained',404);
       let bytes,expected;
       if(kind==='stdout'||kind==='stderr'){if(path!==undefined)throw errorStatus('Unexpected stream selector',400);expected=receipt.claims[kind];if(!expected)throw errorStatus('Retained content unavailable',404);bytes=await retainedBytes(join(job.workspace.root,job.workspace.id,kind+'.log'),65536);}

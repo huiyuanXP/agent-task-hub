@@ -13,8 +13,14 @@ export function manifestPath(value: unknown, prefix: string): asserts value is s
   if (parts.some(p => !/^[A-Za-z0-9_.-]+$/.test(p) || p === '.' || p === '..' || /^(?:\.env(?:\..*)?|\.ssh|\.git|\.aws|\.azure|\.config|\.docker|\.npmrc|\.netrc|credentials(?:\..*)?|id_rsa|id_ed25519)$/i.test(p) || /\.(?:pem|key|p12|pfx)$/i.test(p))) invalid('Unsafe manifest path');
 }
 function noConflicts(paths: string[]) {
-  const sorted = [...paths].sort();
-  for (let i = 1; i < sorted.length; i++) if (sorted[i] === sorted[i - 1] || sorted[i].startsWith(sorted[i - 1] + '/')) invalid('Conflicting manifest paths');
+  const complete = new Set(paths);
+  if (complete.size !== paths.length) invalid('Conflicting manifest paths');
+  for (const path of paths) {
+    const parts = path.split('/');
+    for (let length = 1; length < parts.length; length++) {
+      if (complete.has(parts.slice(0, length).join('/'))) invalid('Conflicting manifest paths');
+    }
+  }
 }
 export function normalizeDefinition(value: unknown): OperationDefinition {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('Invalid operation');

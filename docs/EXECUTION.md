@@ -362,7 +362,11 @@ account. A503 remains a distinct temporary/unconfigured condition.
 - `POST /api/execution/dispatch` with `{action:"start",runId}` atomically reserves
   the permit and returns202 with stable backend identity; it does not claim success.
 - `GET /api/execution/dispatch?runId=<id>` polls bounded metadata and reconciles
-  trusted result/fence/stop receipts into D1.
+  trusted result/fence/stop receipts into D1. If the selected Run has no permit,
+  polling also reconciles the single owned terminal Run that still physically
+  reserves its Ticket. Start performs the same recovery before its atomic permit
+  check. This works after preparing a successor and reloading the UI; only a
+  verified stop receipt releases the predecessor reservation.
 - `POST` with `{action:"cancel",runId}` persists logical cancellation plus outbox
   intent, then sends the durable remote fence. A transport failure does not undo
   the successful cancellation intent or release the physical reservation.
@@ -405,8 +409,14 @@ physical stop stays unconfirmed until a verified stop receipt arrives.
 | `backendConfiguration`, `importSigning`, `importTrust` | Server-only keys/audiences/URLs and distinct signing material |
 | `verifyAttestation`, `ingestAttestation` | Historical v2 trust, immutable receipt insertion, legal lifecycle and verified physical closure in one batch |
 | `handleCheckpoint` | Independent signed service boundary before D1 lookup, no owner permission |
-| `handleBackendRequest`, `reconcileBackend` | Owner HTTP start/poll/cancel/verified-content gateway and durable cancellation delivery |
+| `handleBackendRequest`, `reconcileBackend`, `reconcileTicketReservation` | Owner start/poll/cancel/content gateway, bounded predecessor reservation recovery and durable cancellation delivery |
 | `AuthorizationPanel` | Selected operation, separate approve/start, truthful connection/result state, verified downloads and session-safe polling |
 
 See [RUNNER.md](RUNNER.md) for provisioning, administrator registration, runtime
 limits, restart behavior and the real Worker/Docker/browser acceptance command.
+
+Optional execution registry configuration is resolved only after matching an
+execution MCP tool. Malformed JSON or an invalid explicit registry produces
+`CONFIGURATION_UNAVAILABLE` with status503 for that execution call; authenticated
+planning create/read/claim/save tools remain independent. Verify the actual built
+Worker boundary with `npm run test:execution:configuration`.

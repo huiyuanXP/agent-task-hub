@@ -308,4 +308,7 @@ loopback proxy/CDP observation harness; blocked origins remain recorded.
 `TEST_CHROMIUM_EXECUTABLE=/absolute/chromium` selects a trusted local browser when
 needed. Docker/build/browser suites run serially so unrelated host load does not
 consume execution budgets. CI preserves existing identity/planning/browser gates
-and adds this actual backend gate with trusted host proc access.
+and adds this actual backend gate with trusted host proc access. CI creates and
+checks the shared test-results parent as the ordinary runner user before privileged
+Docker gates, so later ordinary-user integration can create its own artifact
+directory without changing checkout or private-key ownership.

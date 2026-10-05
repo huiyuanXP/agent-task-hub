@@ -5,7 +5,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-export async function planningFixture() {
+export async function planningFixture({ executionRegistry } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'planning-worker-'));
   let worker;
   try {
@@ -24,7 +24,7 @@ export async function planningFixture() {
     worker = new Miniflare({ host: '127.0.0.1', port: 0, modulesRoot: 'dist/server',
       modules: [config.main, ...files.filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
       compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags,
-      bindings: { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUDIENCE: audience, ACCESS_APPLICATION_ORIGIN: origin, ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]' },
+      bindings: { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUDIENCE: audience, ACCESS_APPLICATION_ORIGIN: origin, ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]', ...(executionRegistry === undefined ? {} : { EXECUTION_REGISTRY: executionRegistry }) },
       d1Databases: { DB: '00000000-0000-4000-8000-000000000000' }, d1Persist: join(directory, 'd1'),
       outboundService: request => {
         if (request.url === issuer + '/cdn-cgi/access/certs') return Response.json({ keys: [jwk] });

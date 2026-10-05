@@ -42,6 +42,11 @@ jobs:
             docker --host=unix:///var/run/docker.sock pull \
             node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
       - run: npm run test:unit
+      - name: Keep shared test artifacts owned by the ordinary CI user
+        run: |
+          mkdir -p test-results
+          test -O test-results
+          test -w test-results
       - name: Run real Docker execution checks with trusted host proc access
         run: |
           runner_node="$(command -v node)"
@@ -58,6 +63,7 @@ jobs:
       - name: Verify identity in the already-built Worker
         run: node --experimental-strip-types tests/auth/worker-api.mjs
       - run: npm run test:planning:revisions
+      - run: npm run test:execution:configuration
       - run: npm run test:auth:browser
       - run: npm run test:integration
       - name: Upload failure logs and synthetic browser evidence

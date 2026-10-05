@@ -61,3 +61,10 @@ test('bounded maximal Ticket, escaped argv and static manifests fit the shared s
   assert.ok(Buffer.byteLength(wire)<MAX_PERMIT_BYTES,Buffer.byteLength(wire)+' byte envelope');
  }
 });
+test('complete path sets reject ancestors separated by sorted siblings for inputs and artifacts',async()=>{
+ for(const paths of [['a','a-','a/b'],['a/b','a-','a'],['a/b/c','a/b-','a/b','a-'],['a','a']]){
+  await assert.rejects(operationDescriptor('{}',{...custom(),inputs:paths.map(path=>({path:'input/assets/'+path,bytes:0,sha256:'a'.repeat(64)}))}));
+  await assert.rejects(operationDescriptor('{}',{...custom(),artifacts:paths.map(path=>({path:'output/'+path,maxBytes:1}))}));
+ }
+ const valid=['a-','a/b','a/c','a.b'];await assert.doesNotReject(operationDescriptor('{}',{...custom(),inputs:valid.map(path=>({path:'input/assets/'+path,bytes:0,sha256:'a'.repeat(64)})),artifacts:valid.map(path=>({path:'output/'+path,maxBytes:1}))}));
+});
