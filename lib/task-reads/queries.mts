@@ -19,16 +19,16 @@ export async function listRecords(db: ExecutionDatabase, owner: string, kind: 't
   const clauses = ['r.owner=?', 'r.kind=?'];
   const params: (string | number)[] = [owner, kind];
   for (const [key, field] of [['project', 'project'], ['status', 'status'], ['priority', 'priority'], ['plan_id', 'planId']] as const) {
-    if (key in input.filters) { clauses.push(`json_extract(r.body,'$.${field}')=?`); params.push(input.filters[key]); }
+    if (key in input.filters) { clauses.push(`json_type(r.body,'$.${field}')='text' AND json_extract(r.body,'$.${field}')=?`); params.push(input.filters[key]); }
   }
   if ('idea_id' in input.filters) {
     // An owned Plan wins even when its Idea is missing. COALESCE would wrongly fall back.
     if (kind === 'ticket') {
-      clauses.push(`CASE WHEN EXISTS(SELECT 1 FROM records p WHERE p.owner=? AND p.kind='plan' AND p.id=json_extract(r.body,'$.planId'))
-        THEN (SELECT json_extract(p.body,'$.ideaId') FROM records p WHERE p.owner=? AND p.kind='plan' AND p.id=json_extract(r.body,'$.planId'))
-        ELSE json_extract(r.body,'$.ideaId') END = ?`);
+      clauses.push(`CASE WHEN json_type(r.body,'$.planId')='text' AND EXISTS(SELECT 1 FROM records p WHERE p.owner=? AND p.kind='plan' AND p.id=json_extract(r.body,'$.planId'))
+        THEN (SELECT json_extract(p.body,'$.ideaId') FROM records p WHERE p.owner=? AND p.kind='plan' AND p.id=json_extract(r.body,'$.planId') AND json_type(p.body,'$.ideaId')='text')
+        ELSE CASE WHEN json_type(r.body,'$.ideaId')='text' THEN json_extract(r.body,'$.ideaId') END END = ?`);
       params.push(owner, owner, input.filters.idea_id);
-    } else { clauses.push("json_extract(r.body,'$.ideaId')=?"); params.push(input.filters.idea_id); }
+    } else { clauses.push("json_type(r.body,'$.ideaId')='text' AND json_extract(r.body,'$.ideaId')=?"); params.push(input.filters.idea_id); }
   }
   if (cursor) { clauses.push('(r.created < ? OR (r.created = ? AND r.id < ?))'); params.push(cursor.created, cursor.created, cursor.id); }
   const result = await db.prepare(`SELECT r.* FROM records r WHERE ${clauses.join(' AND ')} ORDER BY r.created DESC,r.id DESC LIMIT ?`).bind(...params, input.limit + 1).all<RecordRow>();
@@ -43,7 +43,8 @@ async function ideaContext(db: ExecutionDatabase, owner: string, body: Record<st
     if (idea.revision === sourceRevision) sourceIdea = recordDTO(idea);
     else {
       const history = await db.prepare(`SELECT * FROM records WHERE owner=? AND kind='history'
-        AND json_extract(body,'$.recordId')=? AND json_extract(body,'$.recordKind')='idea'
+        AND json_type(body,'$.recordId')='text' AND json_extract(body,'$.recordId')=?
+        AND json_type(body,'$.recordKind')='text' AND json_extract(body,'$.recordKind')='idea'
         AND json_extract(body,'$.previousRevision')=? ORDER BY created DESC,id DESC LIMIT 1`).bind(owner, idea.id, sourceRevision).first<RecordRow>();
       if (history) sourceIdea = historyDTO(history, idea.id, sourceRevision);
     }

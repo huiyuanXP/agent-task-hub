@@ -48,6 +48,30 @@ try {
   await insert('ticket-foreign-idea','ticket',{planId:'missing-plan',ideaId:'idea-bob'});
   for (let i=0;i<23;i++) await insert(`bounded-${String(i).padStart(2,'0')}`,'ticket',{planId:'plan-a',title:'Bounded'});
 
+  // SQLite JSON extraction must not turn structured values into matching string fields.
+  for (const kind of ['ticket','plan']) {
+    await insert(`typed-project-object-${kind}`,kind,{project:{x:1}});
+    await insert(`typed-project-string-${kind}`,kind,{project:'{"x":1}'});
+  }
+  await insert('typed-idea-parent','idea',{text:'Parent Idea'});
+  await insert('typed-idea-fallback','idea',{text:'Fallback Idea'});
+  const typedPlanRefs = [['object',{plan:1},'{"plan":1}'],['array',['plan'],'["plan"]'],['number',7,'7']];
+  const typedIdeaRefs = [['object',{idea:1},'{"idea":1}'],['array',['idea'],'["idea"]'],['number',8,'8']];
+  for (const [tag,raw,text] of typedPlanRefs) {
+    await insert(text,'plan',{ideaId:'typed-idea-parent'});
+    await insert(`typed-bad-plan-${tag}`,'ticket',{planId:raw,ideaId:'typed-idea-fallback'});
+    await insert(`typed-good-plan-${tag}`,'ticket',{planId:text,ideaId:'typed-idea-fallback'});
+  }
+  for (const [tag,raw,text] of typedIdeaRefs) {
+    await insert(text,'idea',{text:'String-ID Idea'});
+    for (const kind of ['ticket','plan']) {
+      await insert(`typed-bad-idea-${tag}-${kind}`,kind,{ideaId:raw});
+      await insert(`typed-good-idea-${tag}-${kind}`,kind,{ideaId:text,...(kind === 'plan' ? {ideaRevision:2} : {})});
+    }
+    await insert(`typed-bad-history-${tag}`,'history',{recordId:raw,recordKind:'idea',previousRevision:2,snapshot:{text:'Wrong typed history reference'}});
+    await insert(`typed-parent-bad-idea-${tag}`,'ticket',{planId:`typed-bad-idea-${tag}-plan`,ideaId:'typed-idea-fallback'});
+  }
+
   const snapshot = async () => {
     const tables = await rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name");
     const result = {};
@@ -55,6 +79,35 @@ try {
     return result;
   };
   const before = await snapshot();
+  // Removing stored string guards breaks these literal results, even with valid string arguments.
+  for (const [kind,name] of [['ticket','list_tickets'],['plan','list_plans']]) {
+    const matching = value(await rpc(name,{project:'{"x":1}'}));
+    assert.deepEqual(matching.items.map(row=>row.id),[`typed-project-string-${kind}`]);
+    assert.equal(matching.items[0].project,'{"x":1}');
+  }
+  for (const [tag,,text] of typedPlanRefs) {
+    assert.deepEqual(value(await rpc('list_tickets',{plan_id:text})).items.map(row=>row.id),[`typed-good-plan-${tag}`]);
+    const malformed = value(await rpc('get_ticket',{ticket_id:`typed-bad-plan-${tag}`}));
+    assert.equal(malformed.plan,null); assert.equal(malformed.idea.id,'typed-idea-fallback');
+    const linked = value(await rpc('get_ticket',{ticket_id:`typed-good-plan-${tag}`}));
+    assert.equal(linked.plan.id,text); assert.equal(linked.idea.id,'typed-idea-parent');
+    assert.deepEqual(value(await rpc('get_plan',{plan_id:text})).tickets.items.map(row=>row.id),[`typed-good-plan-${tag}`]);
+  }
+  assert.deepEqual(value(await rpc('list_tickets',{idea_id:'typed-idea-parent'})).items.map(row=>row.id),['typed-good-plan-object','typed-good-plan-number','typed-good-plan-array']);
+  assert.deepEqual(value(await rpc('list_tickets',{idea_id:'typed-idea-fallback'})).items.map(row=>row.id),['typed-bad-plan-object','typed-bad-plan-number','typed-bad-plan-array']);
+  for (const [tag,,text] of typedIdeaRefs) {
+    for (const [kind,name,get,key] of [['ticket','list_tickets','get_ticket','ticket_id'],['plan','list_plans','get_plan','plan_id']]) {
+      assert.deepEqual(value(await rpc(name,{idea_id:text})).items.map(row=>row.id),[`typed-good-idea-${tag}-${kind}`]);
+      assert.equal(value(await rpc(get,{[key]:`typed-bad-idea-${tag}-${kind}`})).idea,null);
+      const validLink = value(await rpc(get,{[key]:`typed-good-idea-${tag}-${kind}`}));
+      assert.equal(validLink.idea.id,text);
+      if (kind === 'plan') { assert.equal(validLink.source_idea,null); assert.equal(validLink.linkage.source_idea_missing,true); }
+    }
+    const malformedParent = value(await rpc('get_ticket',{ticket_id:`typed-parent-bad-idea-${tag}`}));
+    assert.equal(malformedParent.plan.id,`typed-bad-idea-${tag}-plan`); assert.equal(malformedParent.idea,null);
+  }
+  console.log('PASS: stored string types, structured/numeric linkage, and consistent parent/fallback precedence');
+
   // Missing dispatch, dropped predicates and defaulting missing fields all break literal results.
   const filters = {project:'Alpha',status:'todo',priority:'P1'};
   const first = value(await rpc('list_tickets',{...filters,limit:1}));
