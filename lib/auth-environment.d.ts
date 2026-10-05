@@ -5,6 +5,7 @@ declare global {
     interface Env extends AccessEnvironment {
       AUTH_MODE?: 'access' | 'trusted-sites';
       AUTH_TRUST_SITES_HEADERS?: string;
+      EXECUTION_WORKER_MACHINE_INGRESS?: string;
     }
   }
 }

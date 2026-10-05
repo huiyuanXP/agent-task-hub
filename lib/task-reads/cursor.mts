@@ -1,3 +1,4 @@
+import { taskPageBudget, taskResultBytes, taskResultTooLarge } from './bounds.mts';
 import { boundedId, exactObject, invalid } from '../execution/errors.mts';
 import { oneOf, runSources, type Filters, type ReadResource } from './validation.mts';
 export interface CursorContext { owner: string; resource: ReadResource; filters: Filters }
@@ -38,8 +39,18 @@ export async function decodeCursor(cursor: string | undefined, context: CursorCo
   } catch { invalid('Invalid task query cursor'); }
 }
 export interface Page<T> { items: T[]; next_cursor: string | null }
-export async function makePage<T extends CursorPosition, U>(rows: T[], limit: number, context: CursorContext, project: (row: T) => U | Promise<U>): Promise<Page<U>> {
-  const selected = rows.slice(0, limit);
-  const last = selected.at(-1);
-  return { items: await Promise.all(selected.map(project)), next_cursor: rows.length > limit && last ? await encodeCursor({ created: last.created, id: last.id, ...(context.resource === 'ticket_runs' ? { source: last.source } : {}) }, context) : null };
+export async function makePage<T extends CursorPosition, U>(rows: T[], limit: number, context: CursorContext, project: (row: T) => U | Promise<U>, byteBudget = taskPageBudget()): Promise<Page<U>> {
+  const items: U[] = [];
+  let bytes = 0;
+  for (const row of rows.slice(0, limit)) {
+    const item = await project(row);
+    const size = taskResultBytes(item) + 2; // Conservative array separators in both representations.
+    if (bytes + size > byteBudget) {
+      if (!items.length) taskResultTooLarge();
+      break;
+    }
+    items.push(item); bytes += size;
+  }
+  const last = rows[items.length - 1];
+  return { items, next_cursor: rows.length > items.length && last ? await encodeCursor({ created: last.created, id: last.id, ...(context.resource === 'ticket_runs' ? { source: last.source } : {}) }, context) : null };
 }

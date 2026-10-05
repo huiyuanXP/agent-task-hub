@@ -12,7 +12,7 @@
 - Node >=22.13.0; preserve the latest-main approved application `package-lock.json` and installed versions.
 - No production records, credentials, Site reconnection or public deployment.
 - Main now provides verified Cloudflare Access JWT identity (#3), issuer/subject-derived owners and request-scoped session state; caller Sites headers are stripped. All access is owner scoped. Trusted-sites mode is explicitly configured only for compatible trusted ingress or synthetic fixtures, never an implicit public bypass.
-- Main includes `0004_woozy_jimmy_woo.sql` for identity revocation. Task4 dispatch migrations start at `0005` unless newer main migrations land; inspect the actual branch before adding one.
+- Main includes `0004_woozy_jimmy_woo.sql` for identity revocation, `0005_parallel_colonel_america.sql` for planning recovery and `0006_gigantic_betty_ross.sql` for execution permits/attestations. Task5 adds the next ordered migration after inspecting current main, preserving existing SQL/snapshot identities.
 - All test and supervisor listeners bind loopback; each test owns a fresh database.
 - No placeholders, unfinished branches or new Tickets standing in for acceptance.
 - One implementation task at a time; root owns GitHub claims, PRs, merges and completion comments.
@@ -83,6 +83,8 @@ Completed and merged in PR #33; completion comment includes logic, abstractions 
 - [x] Run execution suite and relevant checks, document lifecycle, retained evidence and actual Docker evidence; commit and report.
 
 ### Task 4: Real bounded execution backend (#16)
+
+Completed and merged in PR #36; final hosted CI 37254887119 and independent task/fix/integration reviews passed. Completion comment includes logic, abstractions and Function map.
 
 **Files:** Create focused `runner/server.mjs`, `runner/registry.mjs`, `runner/executor.mjs`, `runner/client.mjs`, `lib/execution/dispatch.mts`, `app/api/execution/dispatch/route.ts`, additive dispatch/physical-reservation migration with coherent schema metadata, `tests/execution/runner.test.mjs`, `tests/execution/dispatch.test.mjs`. Modify Worker env types/config declarations and docs for newly scoped runner bindings; minimal authorization/connection UI may expose actual configured health and approved start/poll/cancel, without static false connection labels. Never include secret values.
 

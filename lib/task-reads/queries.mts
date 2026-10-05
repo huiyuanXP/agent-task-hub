@@ -1,3 +1,4 @@
+import { taskPageBudget } from './bounds.mts';
 import type { ExecutionDatabase } from '../execution/types.mts';
 import type { RecordRow } from '../types';
 import { ExecutionError } from '../execution/errors.mts';
@@ -13,7 +14,7 @@ export async function requireRecord(db: ExecutionDatabase, owner: string, kind: 
   if (!row) throw new ExecutionError('NOT_FOUND', kind === 'ticket' ? 'Ticket not found' : 'Plan not found', 404);
   return row;
 }
-export async function listRecords(db: ExecutionDatabase, owner: string, kind: 'ticket' | 'plan', input: ListInput) {
+export async function listRecords(db: ExecutionDatabase, owner: string, kind: 'ticket' | 'plan', input: ListInput, byteBudget = taskPageBudget()) {
   const context: CursorContext = { owner, resource: kind === 'ticket' ? 'tickets' : 'plans', filters: input.filters };
   const cursor = await decodeCursor(input.cursor, context);
   const clauses = ['r.owner=?', 'r.kind=?'];
@@ -32,7 +33,7 @@ export async function listRecords(db: ExecutionDatabase, owner: string, kind: 't
   }
   if (cursor) { clauses.push('(r.created < ? OR (r.created = ? AND r.id < ?))'); params.push(cursor.created, cursor.created, cursor.id); }
   const result = await db.prepare(`SELECT r.* FROM records r WHERE ${clauses.join(' AND ')} ORDER BY r.created DESC,r.id DESC LIMIT ?`).bind(...params, input.limit + 1).all<RecordRow>();
-  return makePage(result.results, input.limit, context, recordDTO);
+  return makePage(result.results, input.limit, context, recordDTO, byteBudget);
 }
 async function ideaContext(db: ExecutionDatabase, owner: string, body: Record<string, unknown>) {
   const ideaId = typeof body.ideaId === 'string' && body.ideaId ? body.ideaId : null;
@@ -65,6 +66,6 @@ export async function getTicket(db: ExecutionDatabase, owner: string, id: string
 }
 export async function getPlan(db: ExecutionDatabase, owner: string, id: string) {
   const plan = await requireRecord(db, owner, 'plan', id);
-  return { plan: recordDTO(plan), ...await ideaContext(db, owner, recordBody(plan)),
-    tickets: await listRecords(db, owner, 'ticket', { filters: { plan_id: id }, limit: 20 }) };
+  const context = { plan: recordDTO(plan), ...await ideaContext(db, owner, recordBody(plan)) };
+  return { ...context, tickets: await listRecords(db, owner, 'ticket', { filters: { plan_id: id }, limit: 20 }, taskPageBudget(context)) };
 }

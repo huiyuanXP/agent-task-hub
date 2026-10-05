@@ -1,3 +1,4 @@
+import { taskPageBudget } from './bounds.mts';
 import type { OperationDefinition } from '../execution/authorization-types.mts';
 import { validateScope, validateBudget } from '../execution/authorization-validation.mts';
 import { getAuthorization } from '../execution/authorization.mts';
@@ -100,7 +101,7 @@ async function runDTO(db: ExecutionDatabase, owner: string, row: ReadRunRow, reg
     attestations: receipts.results.map(({ receipt }) => evidenceDTO(receipt, owner, row, contractHash)).filter(value => value !== null),
     authorization: await authorizationDTO(db, owner, row, registry) };
 }
-export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry) {
+export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry, byteBudget = taskPageBudget()) {
   const ticketId = input.filters.ticket_id;
   await requireRecord(db, owner, 'ticket', ticketId);
   const context: CursorContext = { owner, resource: 'ticket_runs', filters: input.filters };
@@ -121,5 +122,5 @@ export async function listTicketRuns(db: ExecutionDatabase, owner: string, input
     FROM execution_runs WHERE owner=? AND ticket_id=?
   ) ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY created DESC,id DESC,source DESC LIMIT ?`)
     .bind(...params, input.limit + 1).all<ReadRunRow>();
-  return makePage(result.results, input.limit, context, row => runDTO(db, owner, row, registry));
+  return makePage(result.results, input.limit, context, row => runDTO(db, owner, row, registry), byteBudget);
 }

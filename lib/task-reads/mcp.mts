@@ -1,3 +1,4 @@
+import { taskPageBudget } from './bounds.mts';
 import { boundedId, ExecutionError } from '../execution/errors.mts';
 import type { ExecutionDatabase } from '../execution/types.mts';
 import { getPlan, getTicket, listRecords } from './queries.mts';
@@ -13,9 +14,9 @@ const boundary = 'Reading does not claim, approve, execute or enlarge budgets. U
 export const taskReadTools = [
   { name: 'list_ticket_runs', description: `List owned manual snapshots and actual execution Runs with frozen context and effective authorization; snapshots never prove execution. ${boundary}`, inputSchema: readObjectSchema({ ticket_id: id, source: { type: 'string', enum: runSources }, state: { type: 'string', enum: runStates }, ...page }, ['ticket_id']), annotations: readAnnotations },
   { name: 'list_tickets', description: `List owned Tickets with exact filters and bounded keyset pagination. ${boundary}`, inputSchema: readObjectSchema({ project, status: { type: 'string', enum: ticketStatuses }, priority, plan_id: id, idea_id: id, ...page }), annotations: readAnnotations },
-  { name: 'get_ticket', description: `Read an owned Ticket, original Idea/Plan context and first 20 Runs; continue with list_ticket_runs. ${boundary}`, inputSchema: readObjectSchema({ ticket_id: id }, ['ticket_id']), annotations: readAnnotations },
+  { name: 'get_ticket', description: `Read an owned Ticket, original Idea/Plan context and up to 20 Runs; continue with list_ticket_runs. ${boundary}`, inputSchema: readObjectSchema({ ticket_id: id }, ['ticket_id']), annotations: readAnnotations },
   { name: 'list_plans', description: `List owned Plans with exact filters and bounded keyset pagination. ${boundary}`, inputSchema: readObjectSchema({ project, priority, idea_id: id, ...page }), annotations: readAnnotations },
-  { name: 'get_plan', description: `Read an owned Plan, original Idea revision and first 20 linked Tickets; continue with list_tickets. ${boundary}`, inputSchema: readObjectSchema({ plan_id: id }, ['plan_id']), annotations: readAnnotations },
+  { name: 'get_plan', description: `Read an owned Plan, original Idea revision and up to 20 linked Tickets; continue with list_tickets. ${boundary}`, inputSchema: readObjectSchema({ plan_id: id }, ['plan_id']), annotations: readAnnotations },
 ];
 /** The route supplies its verified owner; raw arguments must reach this validator unchanged. */
 export async function dispatchTaskReadTool(db: ExecutionDatabase, owner: string, name: string, args: unknown, registry: TrustedRegistry): Promise<unknown> {
@@ -27,7 +28,8 @@ export async function dispatchTaskReadTool(db: ExecutionDatabase, owner: string,
     if (name === 'list_ticket_runs') return await listTicketRuns(db, owner, readListInput('ticket_runs', args), registry);
     if (name === 'get_ticket') {
       const id = readRootId(args, 'ticket_id');
-      return { ...await getTicket(db, owner, id), runs: await listTicketRuns(db, owner, { filters: { ticket_id: id }, limit: 20 }, registry) };
+      const context = await getTicket(db, owner, id);
+      return { ...context, runs: await listTicketRuns(db, owner, { filters: { ticket_id: id }, limit: 20 }, registry, taskPageBudget(context)) };
     }
     return await getPlan(db, owner, readRootId(args, 'plan_id'));
   } catch (error) {

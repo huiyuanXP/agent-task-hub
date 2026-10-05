@@ -1,3 +1,6 @@
+import { authenticateWorker } from './execution/workers.mts';
+import { isWorkerAuthorization, workerConfiguration, workerTransport } from './execution/worker-auth.mts';
+import { ExecutionError } from './execution/errors.mts';
 import type { ChatGPTUser } from '../app/chatgpt-auth';
 import { AccessProviderUnavailable, allowsSessionWrite, createAccessVerifier, parseAccessConfig, readAccessToken, safeAuthReturn } from './access-identity.mts';
 import { runWithAuthentication, type AuthenticationContext } from './auth-context';
@@ -37,8 +40,19 @@ export async function authenticateRequest(
   const localUser = development || trusted ? sitesUser(headers) : null;
   for (const name of [...headers.keys()]) if (name.startsWith('oai-authenticated-user-')) headers.delete(name);
   const cleanRequest = new Request(request, { headers });
+  if (isWorkerAuthorization(headers.get('authorization'))) {
+    if (url.pathname !== '/mcp' || url.search) return failure(401);
+    if (!workerTransport(request, env)) return failure(headers.has('cookie') || headers.has('origin') && headers.get('origin') !== url.origin || headers.get('sec-fetch-site') === 'cross-site' ? 403 : 401);
+    let configuration;
+    try { configuration = workerConfiguration(env, url.origin); } catch { return failure(503); }
+    if (!env.DB) return failure(503);
+    try {
+      const worker = await authenticateWorker(env.DB, headers.get('authorization')!.slice(7), configuration);
+      return runWithAuthentication({ kind: 'execution_worker', mode: configuration.mode, user: null, expiresAt: worker.expiresAt, worker }, () => dispatch(cleanRequest));
+    } catch (error) { return failure(error instanceof ExecutionError ? 401 : 503); }
+  }
   if (development || trusted) {
-    const context: AuthenticationContext = { mode: development ? 'development' : 'trusted-sites', user: localUser, expiresAt: null };
+    const context: AuthenticationContext = { kind: 'owner', mode: development ? 'development' : 'trusted-sites', user: localUser, expiresAt: null };
     return runWithAuthentication(context, () => dispatch(cleanRequest));
   }
   if (env.AUTH_MODE && env.AUTH_MODE !== 'access') return failure(503);
@@ -103,5 +117,5 @@ export async function authenticateRequest(
     });
   }
   const { userId, email, displayName, fullName, expiresAt, tokenHash } = identity;
-  return runWithAuthentication({ mode: 'access', user: { userId, email, displayName, fullName }, expiresAt, tokenHash }, () => dispatch(cleanRequest));
+  return runWithAuthentication({ kind: 'owner', mode: 'access', user: { userId, email, displayName, fullName }, expiresAt, tokenHash }, () => dispatch(cleanRequest));
 }

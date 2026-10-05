@@ -22,7 +22,7 @@ Ticket `status` is exactly `todo|running|waiting|done|error`. Run `source` is `m
 
 ## Results and continuation
 
-Successful calls retain the existing result envelope, with `resultType: "complete"`, `isError: false`, `structuredContent` containing the result below and one text content item containing the same JSON. Lists return `{items,next_cursor}`; `next_cursor` is null at the end. Ordering is persisted SQLite text `created DESC,id DESC`, with `source DESC` for merged Runs (manual precedes execution at identical created/id). The query fetches limit+1. A continuation points at the last emitted item and can use a different limit with unchanged filters. Deleting a boundary or inserting newer records does not skip or duplicate surviving items; begin a fresh first page to see newer records.
+Successful calls retain the existing result envelope, with `resultType: "complete"`, `isError: false`, `structuredContent` containing the result below and one text content item containing the same JSON. Lists return `{items,next_cursor}`; `next_cursor` is null at the end. Ordering is persisted SQLite text `created DESC,id DESC`, with `source DESC` for merged Runs (manual precedes execution at identical created/id). The query fetches at most limit+1 rows. The emitted prefix is also constrained by the complete 4 MiB owner task-read response budget, including both MCP representations, detail context and cursor metadata; a page may contain fewer items than the requested limit. A continuation points at the last emitted item and can use a different limit with unchanged filters. Deleting a boundary or inserting newer records does not skip or duplicate surviving items; begin a fresh first page to see newer records.
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_ticket_runs","arguments":{"ticket_id":"ticket-123","limit":20}}}
@@ -35,6 +35,8 @@ Record DTOs include authoritative database `id`, `kind`, `revision`, `created`, 
 Linked Plan/Idea records must belong to the same owner, otherwise null. An owned parent Plan controls a Ticket's Idea reference, even if that Plan's Idea reference is missing or malformed. Only an unavailable parent permits the Ticket's explicit Idea reference as fallback. Ticket `idea_id` list filtering uses this same rule. `idea` is the current original Idea. `source_idea` is its referenced source revision, obtained from same-owner history when needed; unavailable history is null, never replaced with current text. Historical snapshots have allowed content plus `id`, `revision`, `snapshot_saved_at`; history does not establish the prior updated timestamp. When source and current revision match, `source_idea` is the current Idea DTO.
 
 `linkage` contains `source_idea_revision` and `current_idea_revision` (number or null), `superseded`, `idea_missing`, `source_idea_missing`. Ticket linkage also contains `plan_missing`. Missing booleans describe an explicit unresolved reference; absent references do not imply another owner's record exists.
+
+The 4 MiB bound applies only to these five verified owner read tools; workers and other MCP tools retain their 1 MiB bound. Large fields are never truncated to fit. A detail includes its complete Ticket/Plan/current and source Idea context, then as many complete linked items as fit. Continue using its cursor with the corresponding list tool. The budget includes the existing planner's copied Idea fields and a manual Run's additional frozen contract, rather than assuming every generated record has the manual record API's 80,000-unit limit. A real maximum-admission expanded detail is 3,962,547 bytes with a 128-character RPC id. Out-of-contract stored data that cannot fit even one complete item fails with bounded `BODY_TOO_LARGE` (413); it never loops with an empty continuation or silently loses fields.
 
 ## Run projections
 
@@ -69,6 +71,7 @@ Existing authentication failures retain their HTTP boundary. After authenticatio
 
 | `data.code` | `data.status` | Meaning |
 | --- | --- | --- |
+| `BODY_TOO_LARGE` | 413 | A complete item/context exceeds the finite owner read envelope |
 | `INVALID_INPUT` | 400 | Argument/schema/bounds or cursor validation failed |
 | `NOT_FOUND` | 404 | Missing or unowned root Ticket/Plan, with identical resource-specific messages |
 | `STORAGE_UNAVAILABLE` | 503 | Sanitized unexpected storage/projection failure (`Task storage unavailable`) |
@@ -80,4 +83,4 @@ All root, nested, union and evidence join reads independently scope the verified
 
 ## Verification
 
-After `npm run build`, run `npm run test:mcp:task-reads` for both Ticket/Plan and Run suites, or `npm run test:mcp:task-runs` for focused Run coverage. Both use the actual built Worker, fresh isolated D1 with all migrations and real synthetic signed Access JWTs. The Run suite prepares/approves model fixtures and ingests synthetic cryptographically signed version 1/version 2 evidence; it never dispatches a workload or starts a physical Ticket process. Full persistent-table snapshots surround successful and rejected reads. Default `npm test` and hosted CI include the complete read suites. Full Docker/backend acceptance remains separately mandatory; local absence of Docker never converts these checks to skips. See [TESTING.md](TESTING.md).
+After `npm run build`, run `npm run test:mcp:task-reads` for Ticket/Plan, Run and maximum aggregate-envelope suites, or `npm run test:mcp:task-runs` for focused Run coverage. Both use the actual built Worker, fresh isolated D1 with all migrations and real synthetic signed Access JWTs. The Run suite prepares/approves model fixtures and ingests synthetic cryptographically signed version 1/version 2 evidence; it never dispatches a workload or starts a physical Ticket process. Full persistent-table snapshots surround successful and rejected reads. Default `npm test` and hosted CI include the complete read suites. Full Docker/backend acceptance remains separately mandatory; local absence of Docker never converts these checks to skips. See [TESTING.md](TESTING.md).

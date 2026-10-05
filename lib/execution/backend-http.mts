@@ -32,12 +32,16 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
   const config = await backendConfiguration(env);
   const permit = JSON.parse(row.envelope) as DispatchPermit;
   const evidenceContext = { ...context, evidenceTrust: config.evidenceTrust };
+  const ingest = async (receipt: BackendAttestation) => {
+    if (receipt?.claims?.permitId !== row.id || receipt.claims.runId !== run.id) throw new ExecutionError('INVALID_EVIDENCE', 'Backend result belongs to another permit', 409);
+    await ingestAttestation(db, evidenceContext, receipt);
+  };
   if (row.cancel_requested && row.closed_at === null) {
     const cancel = await signedFetch(config.transport, '/cancel', { permit });
     if (cancel.status !== 200) throw Error('Cancellation transport unavailable');
     const { receipts } = cancel.data as BackendResult;
     if (!Array.isArray(receipts) || receipts.length > 3) throw Error('Invalid cancellation result');
-    for (const receipt of receipts) await ingestAttestation(db, evidenceContext, receipt);
+    for (const receipt of receipts) await ingest(receipt);
   }
   const response = await signedFetch(config.transport, '/result', { permit });
   if (response.status === 404) {
@@ -46,7 +50,7 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
   if (response.status !== 200) throw Error('Backend unavailable');
   const result = response.data as BackendResult;
   if (!Array.isArray(result.receipts) || result.receipts.length > 3) throw Error('Invalid backend result');
-  for (const receipt of result.receipts) await ingestAttestation(db, evidenceContext, receipt);
+  for (const receipt of result.receipts) await ingest(receipt);
   if (result.phase === 'running') {
     const current = await getRun(db, context.owner, run.id);
     if (['queued', 'waiting'].includes(current.state)) {
@@ -61,6 +65,9 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
 
 /** A prepared successor can recover its terminal predecessor across UI reloads. */
 async function reconcileTicketReservation(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, run: Run) {
+  // A delegated worker cannot recover another Run. Its owner must close that
+  // predecessor reservation through the existing owner recovery path.
+  if (context.executionRunId) return;
   // The unique physical-Ticket index bounds this to one owned occupying permit.
   const occupied = await db.prepare(`SELECT p.* FROM execution_permits p
     JOIN execution_runs r ON r.owner=p.owner AND r.id=p.run_id
@@ -73,6 +80,7 @@ async function reconcileTicketReservation(db: ExecutionDatabase, context: Author
 }
 
 export async function reconcileBackend(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, runId: string) {
+  if (context.executionRunId && context.executionRunId !== runId) throw new ExecutionError('AUTHORIZATION_DENIED', 'Delegated Run scope rejected', 403);
   const run = await getRun(db, context.owner, runId);
   const permit = await permitForRun(db, context.owner, runId);
   if (!permit) {
