@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { chromium } from './node_modules/playwright/index.mjs';
+import * as workerNetwork from './worker-network.mjs';
 import { launchRestrictedBrowser } from './network.mjs';
 
 async function endpoint(handler) {
@@ -25,6 +26,7 @@ test('redirects cannot escape the two allowed origins', async t => {
     t.diagnostic(`forbidden document redirect requests: ${forbiddenRequests}`);
     assert.equal(forbiddenRequests, 0, 'A forbidden redirect hop reached its server');
     assert.ok(blocked.includes(forbidden.origin), 'Forbidden redirect hop must appear in evidence');
+    assert.ok(restricted.requestedExternal.includes(forbidden.origin), 'Page redirect must remain visible separately from browser background traffic');
     assert.deepEqual(errors, []);
   } finally {
     await restricted?.close();
@@ -52,7 +54,8 @@ test('native allowed redirects preserve document URL, cookies and interactive st
     assert.match(landingCookie, /synthetic_policy=verified/);
     await page.getByRole('button', { name: 'ready', exact: true }).click();
     assert.equal(await page.getByRole('button').innerText(), 'hydrated');
-    assert.deepEqual(restricted.blocked, []);
+    assert.ok(restricted.blocked.every(origin => ![first.origin, second.origin].includes(origin)));
+    assert.deepEqual(restricted.requestedExternal, []);
     assert.deepEqual(restricted.errors, []);
     await restricted.close();
     await assert.rejects(fetch(restricted.proxyOrigin + '/', { signal: AbortSignal.timeout(1000) }));
@@ -75,7 +78,8 @@ test('fetch and popup redirects cannot reach a forbidden origin', async t => {
   });
   const first = await endpoint((request, response) => {
     if (request.url === '/') { response.setHeader('Content-Type', 'text/html'); response.end('<p>local page</p>'); }
-    else { response.writeHead(302, { Location: second.origin + '/forward' }); response.end(); }
+    else if (['/fetch', '/popup'].includes(request.url)) { response.writeHead(302, { Location: second.origin + '/forward' }); response.end(); }
+    else { response.writeHead(204); response.end(); }
   });
   let restricted;
   try {
@@ -218,6 +222,7 @@ test('allowed WebSockets work while off-origin upgrades never reach their server
     }), forbidden.origin.replace('http:', 'ws:') + '/socket');
     assert.equal(forbiddenConnections, 0, 'Off-origin WebSocket bypassed the proxy');
     assert.ok(restricted.blocked.includes(forbidden.origin.replace('http:', 'ws:')));
+    assert.ok(restricted.requestedExternal.includes(forbidden.origin.replace('http:', 'ws:')), 'Forbidden application WebSocket remains in app evidence');
     const workerResults = await page.evaluate(async urls => {
       const connect = url => new Promise((resolve, reject) => {
         const code = `const socket=new WebSocket(${JSON.stringify(url)});socket.onmessage=e=>postMessage(e.data);socket.onerror=()=>postMessage('blocked');socket.onopen=()=>{};`;
@@ -239,4 +244,75 @@ test('allowed WebSockets work while off-origin upgrades never reach their server
     await restricted?.close();
     await Promise.all([first, forbidden].map(server => server.close()));
   }
+});
+
+test('worker-only forbidden WebSocket appears in strict application evidence', async t => {
+  let contacts = 0;
+  const forbidden = await endpoint((_, response) => response.end('forbidden'));
+  forbidden.server.on('connection', () => contacts++);
+  const first = await endpoint((_, response) => response.end('<p>local</p>'));
+  let restricted;
+  try {
+    restricted = await launchRestrictedBrowser(chromium, [first.origin]);
+    const page = await restricted.context.newPage();
+    await page.goto(first.origin);
+    const target = forbidden.origin.replace('http:', 'ws:');
+    const result = await page.evaluate(url => new Promise((resolve, reject) => {
+      const code = `const socket=new WebSocket(${JSON.stringify(url)});socket.onerror=()=>postMessage('blocked')`;
+      const blob = URL.createObjectURL(new Blob([code], {type:'text/javascript'}));
+      const worker = new Worker(blob);
+      const timer = setTimeout(() => reject(Error('Worker timeout')), 5000);
+      worker.onmessage = event => { clearTimeout(timer); worker.terminate(); URL.revokeObjectURL(blob); resolve(event.data); };
+    }), target + '/only-worker');
+    assert.equal(result, 'blocked');
+    await restricted.flushNetworkEvidence();
+    assert.equal(contacts, 0);
+    assert.ok(restricted.blocked.includes(forbidden.origin.replace('http:', 'https:')));
+    t.diagnostic(JSON.stringify({target,contacts,requestedExternal:restricted.requestedExternal,blocked:restricted.blocked,errors:restricted.errors}));
+    assert.ok(restricted.requestedExternal.includes(target), 'worker request must appear as its actual ws origin');
+    assert.throws(() => assert.ok(restricted.requestedExternal.every(origin => origin === 'https://fonts.googleapis.com')), 'strict application allowlist must reject worker traffic');
+    assert.deepEqual(restricted.errors, []);
+  } finally { await restricted?.close(); await Promise.all([first,forbidden].map(server=>server.close())); }
+});
+
+test('directory browser selectors fail before browser allocation', async () => {
+  const previous = process.env.TEST_CHROMIUM_EXECUTABLE;
+  process.env.TEST_CHROMIUM_EXECUTABLE = '/tmp';
+  try {
+    await assert.rejects(launchRestrictedBrowser({launch:async()=>{throw Error('Browser allocation attempted')}}, ['http://127.0.0.1:12345']), /regular executable file/);
+  } finally { if (previous === undefined) delete process.env.TEST_CHROMIUM_EXECUTABLE; else process.env.TEST_CHROMIUM_EXECUTABLE = previous; }
+});
+
+test('the application cannot reach the trusted loopback debugger listener', async () => {
+  const first = await endpoint((_,response)=>response.end('<p>local</p>'));
+  let restricted;
+  try {
+    restricted=await launchRestrictedBrowser(chromium,[first.origin]);
+    const session=await restricted.browser.newBrowserCDPSession();
+    const command=await session.send('Browser.getBrowserCommandLine');
+    const port=command.arguments.find(value=>value.startsWith('--remote-debugging-port=')).split('=')[1];
+    const target=`http://127.0.0.1:${port}`;
+    const page=await restricted.context.newPage();await page.goto(first.origin);
+    const result=await page.evaluate(url=>fetch(url).then(response=>response.status).catch(()=>'blocked'),target+'/json/version');
+    assert.ok(result==='blocked'||result===403);
+    await restricted.flushNetworkEvidence();
+    assert.ok(restricted.blocked.includes(target));
+    assert.ok(restricted.requestedExternal.includes(target));
+    assert.deepEqual(restricted.errors,[]);
+  } finally {await restricted?.close();await first.close()}
+});
+
+
+test('debugger binding tables reject wildcard and nonloopback listeners without opening them', () => {
+  assert.equal(typeof workerNetwork.validateDebuggerBindings,'function','controlled binding verifier seam is missing');
+  const port=12345, hex=port.toString(16).toUpperCase().padStart(4,'0');
+  const row=(address,state='0A',suffix=hex)=>` 0: ${address}:${suffix} 00000000:0000 ${state} 0 0 0`;
+  const table=(...rows)=>'sl local_address rem_address st\n'+rows.join('\n')+'\n';
+  for(const address of ['0100007F','00000000000000000000000001000000'])assert.doesNotThrow(()=>workerNetwork.validateDebuggerBindings([table(row(address))],port));
+  for(const address of ['00000000','00000000000000000000000000000000','0100000A','000080FE000000000000000001000000']){
+    assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F')),table(row(address))],port),/only on loopback/);
+  }
+  assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F','01'))],port),/only on loopback/);
+  assert.throws(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F','0A','FFFF'))],port),/only on loopback/);
+  assert.doesNotThrow(()=>workerNetwork.validateDebuggerBindings([table(row('0100007F'),row('00000000','0A','FFFF'))],port));
 });

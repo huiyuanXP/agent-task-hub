@@ -1,12 +1,15 @@
 import { createServer, request as httpRequest } from 'node:http';
-import { loopbackUrl } from '../harness.mjs';
+import { trustedBrowserExecutable } from './executable.mjs';
+import { observeWorkerNetwork, localDebuggerEndpoint } from './worker-network.mjs';
+import { loopbackUrl, freePort } from '../harness.mjs';
 
 // Chromium bypasses proxies for loopback by default. <-loopback> removes that
 // bypass, so native redirects, popups, frames and workers all cross this gate.
 export async function launchRestrictedBrowser(chromium, values, options = {}) {
+  const executablePath = await trustedBrowserExecutable(process.env.TEST_CHROMIUM_EXECUTABLE);
   const origins = values.map(value => loopbackUrl(value).origin);
-  const blocked = [], errors = [], sockets = new Set(), tunnels = new WeakMap();
-  let browser, closing;
+  const blocked = [], requestedExternal = [], errors = [], sockets = new Set(), tunnels = new WeakMap();
+  let browser, closing, stopObserving;
   const track = socket => {
     if (!sockets.has(socket)) {
       sockets.add(socket);
@@ -88,19 +91,28 @@ export async function launchRestrictedBrowser(chromium, values, options = {}) {
     return closing;
   };
   try {
-    browser = await chromium.launch({ headless: true, proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
+    const debuggerPort = await freePort();
+    browser = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${debuggerPort}`, '--remote-debugging-address=127.0.0.1'], ...(executablePath ? { executablePath } : {}), proxy: { server: proxyOrigin, bypass: '<-loopback>' } });
     browser.once('disconnected', () => { void closeProxy().catch(error => errors.push(error.message)); });
     const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
+    stopObserving = await observeWorkerNetwork(await localDebuggerEndpoint(debuggerPort), origins, requestedExternal, errors, () => browser.close());
+    context.on('request', request => {
+      const url = new URL(request.url());
+      if (['http:', 'https:'].includes(url.protocol) && !origins.includes(url.origin)) requestedExternal.push(url.origin);
+    });
     await context.routeWebSocket('**/*', webSocket => {
       const url = new URL(webSocket.url());
       if (url.protocol === 'ws:' && origins.includes(url.origin.replace(/^ws:/, 'http:'))) return webSocket.connectToServer();
       blocked.push(url.origin);
+      requestedExternal.push(url.origin);
       webSocket.close();
     });
-    return { browser, context, blocked, errors, proxyOrigin, close: async () => {
+    return { browser, context, blocked, requestedExternal, errors, proxyOrigin, flushNetworkEvidence: () => stopObserving.flush(), close: async () => {
+      stopObserving?.close();
       try { await browser.close(); } finally { await closeProxy(); }
     } };
   } catch (error) {
+    stopObserving?.close();
     await browser?.close();
     await closeProxy();
     throw error;

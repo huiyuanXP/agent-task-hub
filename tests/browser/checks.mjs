@@ -12,16 +12,17 @@ assert.equal(moduleUrl.protocol, 'file:', 'Playwright must use the separately lo
 const { chromium } = await import(moduleUrl.href);
 const fixture = JSON.parse(await readFile(join(out, 'fixtures.json'), 'utf8'));
 const errors = [], checks = [];
-let blocked = [], networkErrors = [], page, closeBrowser;
+let blocked = [], requestedExternal = [], networkErrors = [], page, closeBrowser;
 function ok(name) { checks.push(name); console.log('PASS:', name); }
 async function evidence(status, error) {
-  await writeFile(join(out, 'browser-evidence.json'), JSON.stringify({ status, checks, pageErrors: errors, blockedExternalRequests: blocked, networkPolicyErrors: networkErrors, ...(error ? { error: error.message } : {}) }, null, 2) + '\n');
+  await writeFile(join(out, 'browser-evidence.json'), JSON.stringify({ status, checks, pageErrors: errors, blockedExternalRequests: blocked, requestedExternalOrigins: requestedExternal, networkPolicyErrors: networkErrors, ...(error ? { error: error.message } : {}) }, null, 2) + '\n');
 }
 try {
   const restricted = await launchRestrictedBrowser(chromium, [dev, preview], { viewport: { width: 1440, height: 1000 } });
   const context = restricted.context;
   closeBrowser = restricted.close;
   blocked = restricted.blocked;
+  requestedExternal = restricted.requestedExternal;
   networkErrors = restricted.errors;
   context.on('page', current => current.on('pageerror', error => errors.push(error.message)));
   page = await context.newPage();
@@ -101,9 +102,10 @@ try {
   await page.getByRole('alert').waitFor();
   assert.match(await page.getByRole('alert').innerText(), /登录/);
   ok('Built preview hydrates and displays anonymous API auth failure');
+  await restricted.flushNetworkEvidence();
   assert.deepEqual(errors, [], 'Browser JavaScript errors');
   assert.deepEqual(networkErrors, [], 'Browser network policy errors');
-  assert.ok(blocked.every(origin => origin === 'https://fonts.googleapis.com'), 'Unexpected external browser request');
+  assert.ok(requestedExternal.every(origin => origin === 'https://fonts.googleapis.com'), 'Unexpected external application request');
   ok('Remote requests blocked; UI remains usable with system fonts');
   await evidence('passed');
 } catch (error) {
