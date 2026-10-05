@@ -199,8 +199,6 @@ export async function POST(req: Request) {
         component: "mcp",
         stage: "authentication",
         authenticated: !!user,
-        hasUserId: req.headers.has("oai-authenticated-user-id"),
-        hasEmail: req.headers.has("oai-authenticated-user-email"),
       }),
     );
     if (!user)
