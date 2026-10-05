@@ -409,12 +409,12 @@ export async function POST(req: Request) {
       if (!row) throw Error("Idea not found");
       result = await ideaWithPlanning(row, owner);
     } else if (p.name === "claim_planning_job") {
-      const token = crypto.randomUUID();
+      const token = crypto.randomUUID(), claimNow = Date.now();
       const changed = await db
         .prepare(
-          "UPDATE jobs SET status='planning',claim_token=?,lease=? WHERE id=? AND owner=? AND (status='queued' OR (status='planning' AND lease<?)) AND EXISTS(SELECT 1 FROM records i WHERE i.id=jobs.idea_id AND i.owner=jobs.owner AND i.revision=jobs.idea_revision)",
+          "UPDATE jobs SET status='planning',claim_token=?,lease=? WHERE id=? AND owner=? AND (status='queued' OR (status='planning' AND lease<=?)) AND EXISTS(SELECT 1 FROM records i WHERE i.id=jobs.idea_id AND i.owner=jobs.owner AND i.revision=jobs.idea_revision)",
         )
-        .bind(token, Date.now() + 600000, a.job_id, owner, Date.now())
+        .bind(token, claimNow + 600000, a.job_id, owner, claimNow)
         .run();
       if (!changed.meta.changes)
         throw Error("Job completed or claimed; inspect jobs before retrying");
@@ -432,7 +432,7 @@ export async function POST(req: Request) {
       result = {
         job_id: job.id,
         claim_token: token,
-        lease_expires: new Date(Date.now() + 600000).toISOString(),
+        lease_expires: new Date(claimNow + 600000).toISOString(),
         idea: {
           ...JSON.parse(idea.body),
           id: idea.id,
@@ -450,7 +450,7 @@ export async function POST(req: Request) {
       if (job.status === "done") {
         result = JSON.parse(job.result || "{}");
       } else {
-        if (job.claim_token !== a.claim_token || (job.lease ?? 0) < Date.now())
+        if (job.status !== 'planning' || job.claim_token !== a.claim_token || (job.lease ?? 0) <= Date.now())
           throw Error("Claim expired or invalid");
         const idea = await db
           .prepare("SELECT * FROM records WHERE id=? AND owner=?")
@@ -533,10 +533,11 @@ export async function POST(req: Request) {
           plan_id: planId,
           ticket_ids: entries.slice(1).map((t) => t.id),
         };
+        const saveNow = Date.now();
         const batch = entries.map((e) =>
           db
             .prepare(
-              "INSERT OR IGNORE INTO records(id,owner,kind,body,revision,created,updated) SELECT ?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM jobs j JOIN records i ON i.id=j.idea_id WHERE j.id=? AND j.owner=? AND j.claim_token=? AND j.status='planning' AND j.lease>? AND i.revision=j.idea_revision)",
+              "INSERT OR IGNORE INTO records(id,owner,kind,body,revision,created,updated) SELECT ?,?,?,?,1,?,? WHERE EXISTS(SELECT 1 FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner WHERE j.id=? AND j.owner=? AND j.claim_token=? AND j.status='planning' AND j.lease>? AND i.revision=j.idea_revision)",
             )
             .bind(
               e.id,
@@ -548,20 +549,20 @@ export async function POST(req: Request) {
               job.id,
               owner,
               a.claim_token,
-              Date.now(),
+              saveNow,
             ),
         );
         batch.push(
           db
             .prepare(
-              "UPDATE jobs SET status='done',result=? WHERE id=? AND owner=? AND claim_token=? AND status='planning' AND lease>? AND EXISTS(SELECT 1 FROM records WHERE id=? AND revision=?)",
+              "UPDATE jobs SET status='done',result=? WHERE id=? AND owner=? AND claim_token=? AND status='planning' AND lease>? AND EXISTS(SELECT 1 FROM records WHERE id=? AND owner=jobs.owner AND revision=?)",
             )
             .bind(
               JSON.stringify(output),
               job.id,
               owner,
               a.claim_token,
-              Date.now(),
+              saveNow,
               idea.id,
               job.idea_revision,
             ),

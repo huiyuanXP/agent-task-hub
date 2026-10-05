@@ -70,6 +70,12 @@ export interface JobRow {
   status: string;
   event: string;
   delivery: string;
+  generation: number;
+  recoveries: number;
+  wake_deadline: number | null;
+  retry_after: number | null;
+  recovery_reason: string | null;
+  updated_at: number;
   claim_token: string | null;
   lease: number | null;
   result: string | null;
