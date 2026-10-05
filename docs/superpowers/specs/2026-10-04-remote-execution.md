@@ -20,6 +20,8 @@ Persist execution Runs separately from historical manual `records.kind=run`.
 Keep immutable contract and identity columns separate from mutable lifecycle
 columns. Use SQL compare-and-swap and unique keys, never read-then-write as the
 only concurrency guard. Apply additive ordered migrations; preserve old data.
+Main now includes identity revocation migration `0004_woozy_jimmy_woo.sql`; the
+next execution-dispatch migration is currently `0005`, subject to the actual branch.
 
 The execution backend is a real Node process in a hardened Docker container,
 managed by a separate loopback-only Node supervisor. This is an actual bounded
@@ -39,9 +41,13 @@ separate signing material. Missing verifier configuration refuses success.
 
 ## Existing boundaries
 
-Use the current trusted Sites ingress and owner identity. Standalone public
-identity (#3) and public deployment (#5) remain separate existing release gates;
-these changes never enable a public host or change the production Site.
+Use the verified request-scoped account identity now merged in main (#3): the
+Worker verifies Cloudflare Access RS256 application JWTs, issuer/audience and
+explicit membership, derives stable issuer/subject owners, and strips caller
+Sites identity headers. Trusted-sites compatibility requires explicit fixture
+bindings and is not the independent production boundary. Public deployment and
+live provider configuration (#5) remain separate release gates; these changes
+never enable a public host or change the production Site.
 Local synthetic identities and newly created test data are permitted solely for
 isolated loopback integration tests. No production records or credentials.
 Unconfigured execution rejects requests explicitly and never marks a Run done.
@@ -133,6 +139,16 @@ renewal, progress, completion and shutdown handling.
   and policy. The supervisor later consumes this same descriptor; client
   commands and arbitrary operation hashes are never authority. Registry
   extensibility must preserve exact descriptor validation and bounded policy.
+  Task4 extends this to at most32 mirrored administrator definitions through
+  one shared strict normalizer/builder, still selecting one operation per Run.
+  Optional configuration absence uses the built-in; invalid explicit settings
+  fail. Deep-snapshot nested definitions before awaits. Unrelated catalog
+  additions/reordering do not stale a selected grant; selected changes/removal
+  invalidate new starts without erasing historical permitted descriptors.
+  Exact static input manifests map to separate supervisor-private source roots;
+  mandatory frozen Ticket plus static files share the input ceiling. Public
+  configuration/grants/receipts never contain host source roots. Hash the actual
+  copied bytes, fixed argv/image/layout/policy and canonical selected descriptor.
 - Grants have a latest-start expiry. A dispatch permit persists an execution
   deadline no later than that expiry or start plus approved timeout. Lease
   expiry controls caller credentials, independently of the persisted execution
@@ -148,22 +164,87 @@ renewal, progress, completion and shutdown handling.
   is polled, and leases renew concurrently. Persist consumer request IDs before
   network writes so response loss does not mint a different execution. Shutdown
   requests cancellation and waits for confirmed stop or the hard deadline.
-- Freeze all container processes before collecting artifacts while tmpfs is
-  alive. Inspect declared path prefixes through the Docker daemon, rejecting
-  links, hard links, special files and path escape, then copy bounded regular
-  bytes from that quiescent snapshot. Hash exactly the retained bytes. Bound
-  artifact count, individual/total bytes and host stream retention; no generic
-  untrusted archive extraction and no unpaused validation/copy race.
+  Owner-scoped reads also expose actual bounded retained stdout/stderr and
+  declared artifact bytes, checking hashes/lengths against the trusted receipt.
+  Exact declared artifact identities replace arbitrary filesystem paths.
+  Retained content survives workspace cleanup and supervisor restart; missing
+  verified content is explicitly unavailable. Metadata polls remain bounded and
+  lightweight, with separate content reads/downloads where appropriate.
+- Use container cwd `/job`, read-only input volume `/job/input` and a dedicated
+  writable 64 MiB work tmpfs `/job/output`. This preserves the catalog's fixed
+  relative argv paths. Auxiliary `/tmp` and `/dev/shm` are separately bounded.
+  Keep the container alive and start actual operations through Docker exec;
+  obtain the exit code from the daemon's exec identity rather than guest prose.
+  Freeze all container processes before collecting artifacts while tmpfs is
+  alive. Docker 28.4 archives omit live tmpfs contents; capture instead uses a
+  trusted local Linux host adapter with the same kernel and compatible `/proc`
+  visibility. Unsupported topology fails before registered operation execution;
+  the trusted inert keeper may start to establish its process identity. Pin the process
+  directory `/proc/<State.Pid>` first; all subsequent process metadata, namespace
+  and root access goes through that FD, never a reopened numeric PID path. Before
+  reading artifact bytes, verify exact owned container ID/labels, Running+Paused
+  state, full container-ID cgroup membership, stable process starttime and mount
+  namespace, and the pinned output mount's tmpfs type and mount ID. Scan the
+  entire `/job/output` mount through pinned directory/file handles and no-follow
+  child traversal, rejecting symlinks, special files, regular files whose link
+  count is not one, nested mounts, path escape and excessive entries/logical
+  bytes/time. Accept declared regular artifacts only after the whole scan
+  succeeds, including undeclared hard-link aliases. Normalize the exact
+  `output/` artifact prefix. Hash exactly the retained bytes; no generic
+  extraction or unpaused validation/copy race. The watchdog stays armed through
+  capture and cleanup, and pinned handles never follow PID reuse or foreign
+  containers during removal races. Actual Docker tests must establish complete
+  capture and adversarial rejection; otherwise capture fails closed.
 - Transport and evidence have different keys and explicit version/purpose,
   audience and key IDs. Canonical JSON and P-256 raw 64-byte signatures must
   interoperate between Node and Worker. Preserve the evidence key and key ID
   outside guest access across restarts. Evidence binds the durable dispatch
   permit and exact operation definition as well as the Run contract. Configured
   public verifier keys, never caller keys, determine trust.
+  Use directional Worker and supervisor transport keypairs, plus the separate
+  evidence keypair. Signed requests/replies bind fresh nonce, method/path, exact
+  body/status, audience and short expiry. Checkpoints use a narrow signed internal
+  route with authority derived from the persisted permit, never raw Sites owner
+  headers or owner decision capability. Fixed configured URLs reject redirects;
+  fresh verified authorization gates start and bounded checkpoint outage cancels
+  running work without changing its hard deadline.
 - Cancellation intent and physically confirmed container stop are distinct.
   Revocation prevents new dispatch permits/renewals, requests bounded in-flight
   cancellation, and cannot retroactively turn an absorbing cancelled Run into
   success. Backend results remain available for truthful reconciliation.
+  Persist owner cancel/revoke's permit cancellation intent atomically with its
+  SQL lifecycle/audit mutation. Supervisor fsyncs an owner/Run/attempt fence under
+  the same admission lock before acknowledgement and rejects every late start.
+  Fence alone does not confirm already-admitted work stopped; release the
+  physical reservation only on verified durable closure plus actual stop or
+  never-admitted proof covering all create/start uncertainty.
+  Preserve success-only Run evidence SQL and add immutable bounded v2 result,
+  fence and stop attestations. Dispatched success requires v2 exact permit and
+  operation binding; reject v1 downgrade. Reconcile actual result-before-running
+  acknowledgement through legal edges atomically. Retain non-success/history
+  without reviving terminal Runs. Unknown start/exit/artifacts remain explicitly
+  absent; success capture must meet the unchanged deadline, while later timeout
+  or cleanup proofs do not imply new execution authority.
+- Create an inert deterministic container, persist its concrete ID, acknowledge
+  an independent watchdog armed for that ID, then start that same object.
+  Never start by creating a replacement after watchdog cleanup. One unchanged
+  total-container deadline covers execution, artifact collection and cleanup;
+  a monotonic timer is also capped by approved duration. Keep cleanup armed until
+  removal is confirmed. Near-deadline evidence loss yields failure/unavailable
+  evidence; it never disarms cleanup or extends executable authority. Confirm
+  paused-container force removal without resuming guest processes.
+  An unresolved Docker create request may materialize a stopped object after a
+  transport timeout. A single absent lookup does not confirm cleanup in that
+  state; retain pending recovery until concrete identity or definite rejection
+  is established. An acknowledged independent cleanup guardian is armed before
+  the first Docker resource-create mutation and retains eventual cleanup after
+  parent loss during setup. Bound its concurrency and polling; reclaim owned
+  late objects without starting them. The expired deadline never authorizes a
+  later start. Cleanup recovery never grants execution authority.
+- A separate durable owner/Ticket physical execution reservation survives a
+  logically terminal Run and uncertain starts. New permits remain blocked until
+  trusted stop confirmation or reconciliation proves no process was started.
+  A client timeout alone cannot release this reservation.
 
 ## Quality and verification
 
@@ -172,5 +253,25 @@ SQLite/D1 for storage tests; Docker for isolation/backend integration. Tests
 must demonstrate RED before implementation, then GREEN. Run lint, typecheck,
 build, complete execution tests and the applicable API/browser regressions.
 Fresh database per run; loopback listeners; no shared development database.
+Browser regression tooling may select a trusted absolute local Chromium through
+`TEST_CHROMIUM_EXECUTABLE` when its locked browser download is blocked; validate
+the prerequisite before framework allocation and preserve every proxy/origin
+restriction. Default CI uses the locked Playwright browser. This is test-only
+configuration, never a guest or product payload capability.
+Retain every proxy-blocked origin and separately record page/context requests:
+the UI's strict expected external-request check applies to application traffic,
+while browser background traffic remains blocked and visible. Verify actual
+forbidden page requests are recorded and cannot contact forbidden servers.
+Observe worker sockets through a bounded public-CDP adapter: fixed harness-only
+ephemeral loopback listener, same-port endpoint validation without redirects,
+network observation before worker resume, recursive owned-context attribution,
+and explicit failure/cleanup. The diagnostic port is not a browser-allowed
+origin. No private browser-library internals, arbitrary caller launch flags or
+application-provided claims substitute for network observation.
+Verify the diagnostic listener's actual IPv4/IPv6 binding through Linux proc
+network tables filtered to its generated port; endpoint advertising alone is
+insufficient. Fail on wildcard/non-loopback listeners or unavailable verification.
+This browser harness supports Linux with readable proc tables, matching the
+execution backend and CI. Keep this verifier a focused replaceable component.
 Each issue is independently reviewed and merged before claiming the next.
 No placeholders, unfinished branches or new Tickets standing in for acceptance.

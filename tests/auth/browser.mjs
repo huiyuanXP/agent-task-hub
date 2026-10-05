@@ -255,8 +255,16 @@ try {
   const replay = await worker.dispatchFetch(origin + '/api/session', { headers: { authorization: 'Bearer ' + alice } });
   assert.equal(replay.status, 401); await replay.text();
   console.log('PASS: actual same-origin POST logout immediately revokes the browser token');
+  await restricted.flushNetworkEvidence();
+  const evidence = JSON.stringify({
+    pageErrors: errors, requestedExternalOrigins: restricted.requestedExternal,
+    blockedExternalRequests: restricted.blocked, networkPolicyErrors: restricted.errors,
+    syntheticJwksRequests: outbound,
+  });
+  assert.ok(Buffer.byteLength(evidence) <= 64 * 1024, 'Synthetic auth browser evidence exceeds its bound');
+  console.log('VERIFIED_AUTH_BROWSER_EVIDENCE ' + evidence);
   assert.deepEqual(errors, []); assert.deepEqual(restricted.errors, []);
-  assert.ok(restricted.blocked.every(url => url === 'https://fonts.googleapis.com'));
+  assert.ok(restricted.requestedExternal.every(url => url === 'https://fonts.googleapis.com'), 'Unexpected external application request');
   assert.ok(outbound.every(url => url === issuer + '/cdn-cgi/access/certs'));
   assert.ok(requests.some(r => r.path === '/api/session'));
   console.log('PASS: no page errors or unexpected outbound requests');
