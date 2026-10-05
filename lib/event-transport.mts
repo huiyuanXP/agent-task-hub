@@ -5,20 +5,17 @@ import type {
 } from "./types";
 export const EVENT = "idea.planning_requested";
 export function safeCallback(value: string) {
+  // Check the supplied authority before WHATWG normalizes shortened/numeric IPs.
+  if (typeof value !== "string" || /[\s\\#]/.test(value))
+    throw new Error("Callback must use an explicit loopback HTTP(S) host");
+  const authority = /^(https?):\/\/(127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?(?=[/?]|$)/i.exec(value);
+  if (!authority || (authority[3] !== undefined &&
+    (Number(authority[3]) < 1 || Number(authority[3]) > 65535)))
+    throw new Error("Callback must use an explicit loopback HTTP(S) host");
   const u = new URL(value);
-  if (
-    u.protocol !== "https:" ||
-    u.username ||
-    u.password ||
-    (u.port && u.port !== "443") ||
-    !(
-      u.hostname === "chatgpt.com" ||
-      u.hostname.endsWith(".chatgpt.com") ||
-      u.hostname === "openai.com" ||
-      u.hostname.endsWith(".openai.com")
-    )
-  )
-    throw new Error("Callback must use a trusted OpenAI HTTPS host");
+  if (!["http:", "https:"].includes(u.protocol) || u.username || u.password || u.hash ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(u.hostname))
+    throw new Error("Callback must use an explicit loopback HTTP(S) host");
   return u.href;
 }
 export function secretBytes(secret: string) {
@@ -102,5 +99,11 @@ export async function subId(
 }
 
 export class CallbackError extends Error {
-  constructor(public reason: string, public status: number | null = null) { super(reason); }
+  reason: string;
+  status: number | null;
+  constructor(reason: string, status: number | null = null) {
+    super(reason);
+    this.reason = reason;
+    this.status = status;
+  }
 }

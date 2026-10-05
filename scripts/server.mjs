@@ -1,20 +1,32 @@
 import { createServer } from 'node:http';
 import next from 'next';
+import { planningInterval, startPlanningScheduler } from './planning-scheduler.mjs';
+import { loadExecutionConfiguration } from './execution-config.mjs';
 import { database, closeDatabases } from '../lib/local-store.mts';
 import { AuthError, authenticateHeaders, checkRequestOrigin, configuredOrigin } from '../lib/local-auth.mts';
 
 process.env.NEXT_TELEMETRY_DISABLED = '1';
 const args = process.argv.slice(2);
 let dev = false;
-let port = Number(process.env.APP_PORT ?? 5173);
+let executionConfig;
+let requestedPort;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--dev') dev = true;
-  else if (args[i] === '--port') port = Number(args[++i]);
-  else throw Error(`Unknown server option: ${args[i]}`);
+  else if (args[i] === '--port') requestedPort = Number(args[++i]);
+  else if (args[i] === '--execution-config') {
+    executionConfig = args[++i];
+    if (!executionConfig) throw Error('--execution-config requires a private configuration file');
+  } else throw Error(`Unknown server option: ${args[i]}`);
 }
+const controlOrigin = executionConfig ? await loadExecutionConfiguration(executionConfig) : undefined;
+const configuredPort = controlOrigin
+  ? Number(controlOrigin.port || (controlOrigin.protocol === 'https:' ? 443 : 80))
+  : 5173;
+const port = requestedPort ?? Number(process.env.APP_PORT ?? configuredPort);
+const schedulerInterval = planningInterval();
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid server port');
 
-const hostname = process.env.APP_HOST ?? '127.0.0.1';
+const hostname = process.env.APP_HOST ?? (controlOrigin?.hostname === '[::1]' ? '::1' : controlOrigin?.hostname) ?? '127.0.0.1';
 const originHostname = hostname.includes(':') ? `[${hostname}]` : hostname;
 process.env.APP_ORIGIN ??= `http://${originHostname}:${port}`;
 const origin = configuredOrigin();
@@ -67,13 +79,16 @@ await new Promise((resolve, reject) => {
   server.once('error', reject);
   server.listen(port, hostname, resolve);
 });
+const scheduler = startPlanningScheduler(db, schedulerInterval);
 console.log(`Local server ready at ${origin}`);
 
 let stopping = false;
 async function shutdown() {
   if (stopping) return;
   stopping = true;
-  await new Promise(resolve => server.close(resolve));
+  const httpClosed = new Promise(resolve => server.close(resolve));
+  await scheduler.stop();
+  await httpClosed;
   await app.close();
   closeDatabases();
 }

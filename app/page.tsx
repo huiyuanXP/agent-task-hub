@@ -204,7 +204,7 @@ export default function Home() {
         }
       } catch (e) {
         if (seq === loadSequence.current)
-          setError(e instanceof Error ? e.message : "无法连接云端");
+          setError(e instanceof Error ? e.message : "无法连接本地");
       } finally {
         if (seq === loadSequence.current) setLoading(false);
       }
@@ -272,7 +272,7 @@ export default function Home() {
       if (version !== identityVersion.current) return null;
       await load();
       if (version !== identityVersion.current) return null;
-      setNotice("已保存到云端");
+      setNotice("已保存到本地");
       setTimeout(() => setNotice(""), 3500);
       return d;
     } catch (e) {
@@ -764,7 +764,7 @@ export default function Home() {
             </div>
           )}
           {loading && rows.length === 0 ? (
-            <div className="empty">正在读取云端工作区…</div>
+            <div className="empty">正在读取本地工作区…</div>
           ) : (
             <>
               {view === "inbox" && (
@@ -1008,31 +1008,21 @@ export default function Home() {
                 <div className="integration-grid">
                   {[
                     [
-                      "云端工作区",
+                      "本地工作区",
                       "已启用",
-                      "点子、Plan、Ticket 和执行记录保存到云端；修订冲突会阻止覆盖。",
+                      "点子、Plan、Ticket 和执行记录保存到本地；修订冲突会阻止覆盖。",
                     ],
                     [
-                      "AI Planner / MCP Events",
-                      planning.subscriptions > 0 ? "已订阅" : "待连接插件",
+                      "本地规划消费者 / MCP Events",
+                      planning.subscriptions > 0 ? "已订阅" : "待连接消费者",
                       planning.subscriptions > 0
-                        ? "点子保存后发送事件，订阅此事件的 ChatGPT Agent 读取原文、生成 Plan 和 Tickets 并回写。"
-                        : "已实现事件接口。连接此网站的插件并订阅点子规划事件后，才会自动唤醒 Agent。未投递的请求保留，可手动重试。",
+                        ? "点子保存后发送事件，订阅此事件的本地规划消费者 读取原文、生成 Plan 和 Tickets 并回写。"
+                        : "本地消费者通过 MCP 订阅点子规划事件后接收签名回调；未投递的请求持久保存，可手动重试。",
                     ],
                     [
-                      "VM Runner / OpenAgents",
+                      "本地 Runner",
                       "查看授权面板",
                       "已批准的登记操作可通过执行授权面板启动；后端连接和实际结果以该面板为准。手动记录不代表进程执行。",
-                    ],
-                    [
-                      "定时任务与额度",
-                      "未启用",
-                      "周期仅作为任务属性保存，尚未调度。模型与执行端的额度暂不可用。",
-                    ],
-                    [
-                      "设备配对",
-                      "待接入",
-                      "已按本次确认改用 ChatGPT 私有访问。原规划的设备配对暂不启用。",
                     ],
                   ].map(([a, b, c]) => (
                     <article className="idea-card" key={a}>
@@ -1334,7 +1324,7 @@ export default function Home() {
                   取消
                 </button>
                 <button className="primary" disabled={saving}>
-                  {saving ? "保存中…" : "保存到云端"}
+                  {saving ? "保存中…" : "保存到本地"}
                 </button>
               </div>
             </form>

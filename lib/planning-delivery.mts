@@ -1,5 +1,5 @@
 import type { LocalDatabase } from './database.mts';
-import { CallbackError, signedPost } from './event-transport';
+import { CallbackError, signedPost } from './event-transport.mts';
 import type { JobRow, PlanningEvent, Subscription } from './types';
 
 export interface DeliveryRow {

@@ -2,7 +2,7 @@ import { configuredOrigin } from '../../lib/local-auth.mts';
 import { executionEnvironment } from '../../lib/runtime-environment';
 const env = executionEnvironment();
 import { configuredRegistry } from '../../lib/execution/backend-config.mts';
-import { backfillPlanning } from "../../lib/planning-recovery";
+import { backfillPlanning } from "../../lib/planning-recovery.mts";
 import type {
   JsonSchema,
   RpcRequest,

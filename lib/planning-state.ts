@@ -6,7 +6,7 @@ import type {
   VisibleJob,
 } from "./types";
 import { database } from "./store";
-import { planningMetadata } from "./planning-recovery";
+import { planningMetadata } from "./planning-recovery.mts";
 
 /** Public whitelist: internal job/event/claim storage must never cross a read API. */
 export async function visibleJob(

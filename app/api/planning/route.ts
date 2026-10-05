@@ -4,7 +4,7 @@ import { visibleJob, visibleJobs } from "../../../lib/planning-state";
 import { getCurrentUser } from "../../../lib/current-user";
 import { database } from "../../../lib/store";
 import { deliverJob, EVENT } from "../../../lib/events";
-import { retryPlanningJob } from "../../../lib/planning-recovery";
+import { retryPlanningJob } from "../../../lib/planning-recovery.mts";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "请登录" }, { status: 401 });
