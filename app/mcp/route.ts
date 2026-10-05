@@ -334,7 +334,7 @@ export async function POST(req: Request) {
         id,
         error: { code: -32601, message: "Method not found" },
       });
-    const taskReadResult = await dispatchTaskReadTool(db, owner, p.name as string, p.arguments);
+    const taskReadResult = await dispatchTaskReadTool(db, owner, p.name as string, p.arguments, () => configuredRegistry(env));
     if (taskReadResult !== undefined) return respond({
       content: [{ type: "text", text: JSON.stringify(taskReadResult) }], structuredContent: taskReadResult, isError: false,
     });

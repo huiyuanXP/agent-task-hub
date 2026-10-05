@@ -62,7 +62,8 @@ jobs:
       - run: npm run test:auth
       - name: Verify identity in the already-built Worker
         run: node --experimental-strip-types tests/auth/worker-api.mjs
-      - run: npm run test:mcp:task-reads
+      - name: Verify readonly Ticket, Plan, manual and execution Run MCP queries
+        run: npm run test:mcp:task-reads
       - run: npm run test:planning:revisions
       - run: npm run test:execution:configuration
       - run: npm run test:planning:recovery

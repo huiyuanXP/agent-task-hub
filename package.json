@@ -28,7 +28,8 @@
     "test:planning:recovery": "node --experimental-strip-types tests/planning/recovery.mjs",
     "test:planning:lifecycle": "node --experimental-strip-types tests/planning/lifecycle.mjs",
     "test:planning:browser": "node --experimental-strip-types tests/planning/browser.mjs",
-    "test:mcp:task-reads": "node --experimental-strip-types tests/mcp/task-reads.mjs"
+    "test:mcp:task-reads": "node --experimental-strip-types tests/mcp/task-reads.mjs && npm run test:mcp:task-runs",
+    "test:mcp:task-runs": "node --experimental-strip-types tests/mcp/task-run-reads.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

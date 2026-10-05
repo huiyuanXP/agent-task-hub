@@ -140,3 +140,27 @@ The following decisions were made under the user’s authorization to proceed au
 - An expired planning claim without an active matching subscription clears its old token and persists a fresh generation/reason without spending automatic recoveries — the no-subscription rule must preserve recovery budget while revoking expired authority — if wrong, unattended poll-only consumers can exceed the usual recovery-generation budget; same-owner CAS/current revision guards still bound authority. Queued no-subscription ticks must not repeatedly regenerate.
 - An accepted event's wake deadline survives subscription expiry; only when due may an unclaimed disconnected job create one fresh generation without spending automatic recoveries — same subscription refresh before5minutes must retain accepted event/generation, after deadline must be able to wake again — if wrong, disconnect/reconnect loops can create budget-free generations at the acknowledgement interval; repeated no-subscription cron must not churn and exhausted jobs remain terminal. Implementer identified actual stuck reconnect path and adds RED/covering checks before commit.
 - Limit invalidation to50 targetrows TOTAL per deliverDue, stable ordering and optionalowner/jobscope — specrequiresboundedhousekeeping butdidn'tgivea targetcap;50 matchesdiscoverybatchscale — if wrong, dormantcleanup takesadditionalticks; currentQueued/activeTarget sendguards must remain independent of cleanup.
+
+## #11 — Readonly MCP Ticket, Plan and Run queries
+
+Added five owner-scoped tools: `list_tickets`, `get_ticket`, `list_plans`, `get_plan`
+and `list_ticket_runs`. Exact runtime schemas, canonical context-bound keysets and
+safe known-field DTOs preserve the existing protocol and verified identity boundary.
+Details retain current/original Idea revision context and first-20 linked pages.
+Manual Runs remain snapshots; actual execution Runs expose immutable contracts,
+safe version 1/version 2 evidence and bounded failed/cancel/stop history. Effective
+grant status comes from the existing authorization domain and current configured
+registry, resolved only for a same-owner bound grant. Reads never claim, approve,
+execute, renew, audit or alter budgets. Both locks and existing execution/planning
+implementations remain unchanged.
+
+Actual Worker/fresh-D1/signed-JWT regressions exercise stored-type guards, cross-owner
+links, same-ID/source ties, continuation, all effective grant states, safe nested
+projection, current custom registries and lazy malformed-configuration isolation.
+Model fixtures use synthetic signed receipts and attestations without physical
+Ticket execution. All persistent user tables are compared before and after reads.
+The combined suites are included in default testing and explicit hosted CI.
+[MCP-TASK-READS.md](MCP-TASK-READS.md) documents the final public contract. Detailed
+RED/GREEN and final validation evidence is retained in ignored
+`.superpowers/sdd/2026-10-05-mcp-task-reads/`. Mandatory full hosted Docker acceptance
+is preserved; local absence of that prerequisite is disclosed in the task report.
