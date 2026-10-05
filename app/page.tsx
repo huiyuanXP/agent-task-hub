@@ -4,7 +4,13 @@ import { AuthorizationPanel } from "../components/execution/authorization-panel"
 import type { FormEvent } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import type { Row, RecordDraft, PlanningState, JobRow, SessionState } from "../lib/types";
+import type {
+  Row,
+  RecordDraft,
+  PlanningState,
+  JobRow,
+  SessionState,
+} from "../lib/types";
 import {
   Lightbulb,
   Inbox,
@@ -131,61 +137,74 @@ export default function Home() {
     setLoading(false);
     setError("登录已失效或无权访问，请重新登录");
   }, [clearPrivateState]);
-  const authenticationDenied = useCallback((response: Response) => {
-    if (response.status !== 401 && response.status !== 403) return false;
-    expireSession();
-    return true;
-  }, [expireSession]);
+  const authenticationDenied = useCallback(
+    (response: Response) => {
+      if (response.status !== 401 && response.status !== 403) return false;
+      expireSession();
+      return true;
+    },
+    [expireSession],
+  );
   const accountId = session?.user.userId;
   const panelAuthenticationDenied = useCallback(() => {
-    if (identityVersion.current === accountVersion && sessionRef.current?.user.userId === accountId) {
+    if (
+      identityVersion.current === accountVersion &&
+      sessionRef.current?.user.userId === accountId
+    ) {
       expireSession();
     }
   }, [accountId, accountVersion, expireSession]);
-  const load = useCallback(async (silent = false) => {
-    const seq = ++loadSequence.current;
-    if (!silent) setLoading(true);
-    try {
-      const sr = await fetch("/api/session", { cache: "no-store" });
-      if (seq !== loadSequence.current) return;
-      if (authenticationDenied(sr)) return;
-      if (!sr.ok) throw Error("账户服务暂时不可用，请稍后重试");
-      const next = (await sr.json()) as SessionState;
-      if (seq !== loadSequence.current) return;
-      if (next.expiresAt !== null && next.expiresAt <= Date.now()) {
-        expireSession();
-        return;
+  const load = useCallback(
+    async (silent = false) => {
+      const seq = ++loadSequence.current;
+      if (!silent) setLoading(true);
+      try {
+        const sr = await fetch("/api/session", { cache: "no-store" });
+        if (seq !== loadSequence.current) return;
+        if (authenticationDenied(sr)) return;
+        if (!sr.ok) throw Error("账户服务暂时不可用，请稍后重试");
+        const next = (await sr.json()) as SessionState;
+        if (seq !== loadSequence.current) return;
+        if (next.expiresAt !== null && next.expiresAt <= Date.now()) {
+          expireSession();
+          return;
+        }
+        if (sessionRef.current?.user.userId !== next.user.userId)
+          clearPrivateState();
+        sessionRef.current = next;
+        setSession(next);
+        if (expiryTimer.current) clearTimeout(expiryTimer.current);
+        expiryTimer.current =
+          next.expiresAt === null
+            ? null
+            : setTimeout(expireSession, next.expiresAt - Date.now());
+        const [r, pr] = await Promise.all(
+          ["/api/records", "/api/planning"].map(async (url) => {
+            const response = await fetch(url, { cache: "no-store" });
+            // A sibling may fail or never finish; process current denials immediately.
+            if (seq === loadSequence.current) authenticationDenied(response);
+            return response;
+          }),
+        );
+        if (seq !== loadSequence.current) return;
+        const d = (await r.json()) as { records: Row[]; error?: string },
+          pd = (await pr.json()) as PlanningState;
+        if (!r.ok) throw Error(d.error);
+        if (!pr.ok) throw Error(pd.error);
+        if (seq === loadSequence.current) {
+          setRows(d.records);
+          setPlanning(pd);
+          setError("");
+        }
+      } catch (e) {
+        if (seq === loadSequence.current)
+          setError(e instanceof Error ? e.message : "无法连接云端");
+      } finally {
+        if (seq === loadSequence.current) setLoading(false);
       }
-      if (sessionRef.current?.user.userId !== next.user.userId) clearPrivateState();
-      sessionRef.current = next;
-      setSession(next);
-      if (expiryTimer.current) clearTimeout(expiryTimer.current);
-      expiryTimer.current = next.expiresAt === null ? null : setTimeout(expireSession, next.expiresAt - Date.now());
-      const [r, pr] = await Promise.all(
-        ["/api/records", "/api/planning"].map(async (url) => {
-          const response = await fetch(url, { cache: "no-store" });
-          // A sibling may fail or never finish; process current denials immediately.
-          if (seq === loadSequence.current) authenticationDenied(response);
-          return response;
-        }),
-      );
-      if (seq !== loadSequence.current) return;
-      const d = (await r.json()) as { records: Row[]; error?: string },
-        pd = (await pr.json()) as PlanningState;
-      if (!r.ok) throw Error(d.error);
-      if (!pr.ok) throw Error(pd.error);
-      if (seq === loadSequence.current) {
-        setRows(d.records);
-        setPlanning(pd);
-        setError("");
-      }
-    } catch (e) {
-      if (seq === loadSequence.current)
-        setError(e instanceof Error ? e.message : "无法连接云端");
-    } finally {
-      if (seq === loadSequence.current) setLoading(false);
-    }
-  }, [authenticationDenied, clearPrivateState, expireSession]);
+    },
+    [authenticationDenied, clearPrivateState, expireSession],
+  );
   useEffect(() => {
     const sequence = loadSequence;
     const startup = window.setTimeout(() => {
@@ -211,7 +230,12 @@ export default function Home() {
   function openPlan(idea: Row) {
     const plan =
       rows.find((r) => r.kind === "plan" && r.id === idea.planId) ||
-      rows.find((r) => r.kind === "plan" && r.ideaId === idea.id);
+      rows.find(
+        (r) =>
+          r.kind === "plan" &&
+          r.ideaId === idea.id &&
+          r.ideaRevision === idea.revision,
+      );
     if (plan) {
       setDraft({ ...plan });
     } else {
@@ -231,7 +255,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(value),
       });
-      if (version !== identityVersion.current || authenticationDenied(r)) return null;
+      if (version !== identityVersion.current || authenticationDenied(r))
+        return null;
       const d = (await r.json()) as {
         id: string;
         revision: number;
@@ -245,7 +270,8 @@ export default function Home() {
       setTimeout(() => setNotice(""), 3500);
       return d;
     } catch (e) {
-      if (version === identityVersion.current) setError(e instanceof Error ? e.message : "保存失败，内容已保留");
+      if (version === identityVersion.current)
+        setError(e instanceof Error ? e.message : "保存失败，内容已保留");
       return null;
     } finally {
       if (version === identityVersion.current) setSaving(false);
@@ -275,7 +301,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ideaId: idea.id }),
       });
-      if (version !== identityVersion.current || authenticationDenied(r)) return;
+      if (version !== identityVersion.current || authenticationDenied(r))
+        return;
       const d = (await r.json()) as {
         job: Pick<JobRow, "status" | "delivery">;
         error?: string;
@@ -297,7 +324,8 @@ export default function Home() {
       );
       setTimeout(() => setNotice(""), 6000);
     } catch (e) {
-      if (version === identityVersion.current) setError(e instanceof Error ? e.message : "请求失败");
+      if (version === identityVersion.current)
+        setError(e instanceof Error ? e.message : "请求失败");
     } finally {
       if (version === identityVersion.current) setSaving(false);
     }
@@ -524,16 +552,26 @@ export default function Home() {
               <>
                 <span aria-label="当前账户">
                   <span>{session.user.displayName}</span>
-                  {session.mode === "development" && <small> · 本地开发身份</small>}
+                  {session.mode === "development" && (
+                    <small> · 本地开发身份</small>
+                  )}
                 </span>
                 <span className="avatar small" aria-label="账户缩写">
-                  {session.user.displayName.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join("").toUpperCase()}
+                  {session.user.displayName
+                    .trim()
+                    .split(/\s+/)
+                    .slice(0, 2)
+                    .map((part) => Array.from(part)[0])
+                    .join("")
+                    .toUpperCase()}
                 </span>
                 <form method="post" action="/signout-with-chatgpt">
                   <button type="submit">退出登录</button>
                 </form>
               </>
-            ) : !loading && <a href="/signin-with-chatgpt?return_to=%2F">登录</a>}
+            ) : (
+              !loading && <a href="/signin-with-chatgpt?return_to=%2F">登录</a>
+            )}
           </div>
         </header>
         <main>
@@ -830,6 +868,22 @@ export default function Home() {
                       >
                         <h3>{p.title}</h3>
                       </button>
+                      {p.ideaId &&
+                        p.ideaRevision !== undefined &&
+                        (() => {
+                          const sourceIdea = ideas.find(
+                            (idea) => idea.id === p.ideaId,
+                          );
+                          return (
+                            <p className="planning-status">
+                              {!sourceIdea
+                                ? "来源点子不可用"
+                                : sourceIdea.revision === p.ideaRevision
+                                  ? `来源点子 v${p.ideaRevision} · 当前版本`
+                                  : `已过期 · 点子 v${p.ideaRevision} / 当前 v${sourceIdea.revision}`}
+                            </p>
+                          );
+                        })()}
                       <p className="idea-text">{p.goal}</p>
                       <div className="idea-footer">
                         <button
@@ -855,7 +909,13 @@ export default function Home() {
                   ))}
                 </div>
               )}
-              {view === "board" && <AuthorizationPanel key={session?.user.userId ?? "anonymous"} tickets={tickets} onAuthenticationDenied={panelAuthenticationDenied} />}
+              {view === "board" && (
+                <AuthorizationPanel
+                  key={session?.user.userId ?? "anonymous"}
+                  tickets={tickets}
+                  onAuthenticationDenied={panelAuthenticationDenied}
+                />
+              )}
               {view === "board" && (
                 <div className={"board " + (list ? "as-list" : "")}>
                   {Object.entries(statuses)

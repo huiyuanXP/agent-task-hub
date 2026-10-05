@@ -63,6 +63,15 @@ export async function POST(req: Request) {
         { error: "请填写标题（最多 250 字），并缩短过长的内容" },
         { status: 400 },
       );
+    if (
+      kind === "idea" &&
+      body.project !== undefined &&
+      (typeof body.project !== "string" || body.project.length > 120)
+    )
+      return Response.json(
+        { error: "项目名称须为文字（最多 120 字）" },
+        { status: 400 },
+      );
     if (kind === "ticket" && !states.includes(body.status || ""))
       return Response.json({ error: "无效的 Ticket 状态" }, { status: 400 });
     if (
@@ -99,8 +108,13 @@ export async function POST(req: Request) {
           { error: "执行快照不可修改，请追加新记录" },
           { status: 400 },
         );
+      if (old.revision !== revision)
+        return Response.json(
+          { error: "另一处已修改此记录。请刷新并重新打开，避免覆盖新内容" },
+          { status: 409 },
+        );
       const auditId = crypto.randomUUID();
-      const results = await db.batch([
+      const statements = [
         db
           .prepare(
             "INSERT INTO records (id,owner,kind,body,revision,created,updated) SELECT ?,?,'history',?,1,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND revision=?)",
@@ -126,12 +140,56 @@ export async function POST(req: Request) {
             "UPDATE records SET body=?,revision=revision+1,updated=? WHERE id=? AND owner=? AND revision=?",
           )
           .bind(JSON.stringify(body), now, id, user.userId, revision),
-      ]);
+      ];
+      const jobId = `planning:${id}:${revision + 1}`;
+      if (kind === "idea") {
+        const event = {
+          eventId: "evt_" + jobId,
+          name: EVENT,
+          timestamp: now,
+          data: {
+            idea_id: id,
+            idea_revision: revision + 1,
+            job_id: jobId,
+            project: body.project || "通用",
+          },
+          cursor: null,
+        };
+        statements.push(
+          db
+            .prepare(
+              "INSERT OR IGNORE INTO jobs (id,owner,idea_id,idea_revision,status,event,delivery,created) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND kind='history') AND EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND kind='idea' AND revision=?)",
+            )
+            .bind(
+              jobId,
+              user.userId,
+              id,
+              revision + 1,
+              "queued",
+              JSON.stringify(event),
+              "pending",
+              now,
+              auditId,
+              user.userId,
+              id,
+              user.userId,
+              revision + 1,
+            ),
+        );
+      }
+      const results = await db.batch(statements);
       if (!results[1].meta.changes)
         return Response.json(
           { error: "另一处已修改此记录。请刷新并重新打开，避免覆盖新内容" },
           { status: 409 },
         );
+      if (kind === "idea") {
+        try {
+          await deliverJob(jobId, user.userId);
+        } catch {
+          console.error("Event retained for retry");
+        }
+      }
       return Response.json({ id, revision: revision + 1 });
     }
     if (kind === "run") {
