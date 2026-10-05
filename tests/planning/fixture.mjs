@@ -22,6 +22,7 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
       .setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid: jwk.kid }).setIssuer(issuer).setAudience(audience)
       .setIssuedAt().setExpirationTime('10m').sign(privateKey);
     const unexpected = [];
+    const pauseGates = new Map();
     const files = await readdir('dist/server', { recursive: true });
     const options = { host: '127.0.0.1', port: 0, modulesRoot: 'dist/server',
       modules: [config.main, ...files.filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
@@ -30,6 +31,12 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
       d1Databases: { DB: '00000000-0000-4000-8000-000000000000' }, d1Persist: join(directory, 'd1'),
       outboundService: async request => {
         if (request.url === issuer + '/cdn-cgi/access/certs') return Response.json({ keys: [jwk] });
+        if (engineHarness && request.url === 'https://planning-fixture.internal/pause') {
+          const gate = pauseGates.get(await request.text());
+          assert.ok(gate, 'Only an explicitly registered fixture acquisition may pause');
+          gate.paused = true; await gate.released;
+          return new Response(null, { status: 204 });
+        }
         const target = callbacks[request.url];
         if (target) {
           const body = await request.text();
@@ -51,8 +58,34 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
     if (engineHarness) {
       const bundled = await build({ stdin: { contents: `
         import { planningMetadata, retryPlanningJob, deliverJob } from './lib/planning-recovery';
+        import { deliverDue } from './lib/planning-delivery';
+        function delayedDatabase(db, gate) {
+          function statement(inner) {
+            return new Proxy(inner, { get(target, key) {
+              if (key === 'bind') return (...args) => statement(target.bind(...args));
+              if (key === 'all') return async (...args) => {
+                const result = await target.all(...args);
+                // Pause only after a real due-target read, retaining its snapshot.
+                if (!gate.paused && result.results.some(row => 'delivery_token' in row && 'attempts' in row)) {
+                  gate.paused = true; await fetch('https://planning-fixture.internal/pause', { method: 'POST', body: gate.id });
+                }
+                return result;
+              };
+              const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+            }});
+          }
+          return new Proxy(db, { get(target, key) {
+            if (key === 'prepare') return query => statement(target.prepare(query));
+            const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+          }});
+        }
         export default { async fetch(request, env) {
           const { operation, id, owner } = await request.json();
+          if (operation === 'delayed-due') {
+            await deliverDue(delayedDatabase(env.DB, { id, paused: false }), owner, id);
+            return Response.json({});
+          }
+          if (operation === 'due') { await deliverDue(env.DB, owner, id); return Response.json({}); }
           if (operation === 'deliver') { await deliverJob(id, owner); return Response.json({}); }
           if (operation === 'retry') return Response.json(await retryPlanningJob(id, owner, env.DB));
           const job = await env.DB.prepare('SELECT * FROM jobs WHERE id=? AND owner=?').bind(id, owner).first();
@@ -86,9 +119,18 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
       assert.equal(response.status, 200); return response.body;
     };
     return { engine: async (operation, id, owner) => {
-      const helper = await worker.getWorker('planning-helper');
-      const response = await helper.fetch('https://fixture.internal/', { method: 'POST', body: JSON.stringify({ operation, id, owner }) });
-      return response.json();
+      if (operation === 'pause-state') return { paused: pauseGates.get(id)?.paused ?? false };
+      if (operation === 'resume') { pauseGates.get(id)?.release(); return {}; }
+      if (operation === 'delayed-due') {
+        const gate = { paused: false };
+        gate.released = new Promise(resolve => { gate.release = resolve; });
+        pauseGates.set(id, gate);
+      }
+      try {
+        const helper = await worker.getWorker('planning-helper');
+        const response = await helper.fetch('https://fixture.internal/', { method: 'POST', body: JSON.stringify({ operation, id, owner }) });
+        return await response.json();
+      } finally { if (operation === 'delayed-due') pauseGates.delete(id); }
     }, get db() { return db; }, request, rpc, scheduled: async () => { assert.deepEqual(config.triggers.crons, ['*/1 * * * *']); const entry = await worker.getWorker(engineCode ? 'app' : undefined); return entry.scheduled({ cron: config.triggers.crons[0], scheduledTime: Date.now() }); }, restart: async () => { await worker.dispose(); worker = launch(); await worker.ready; db = await worker.getD1Database('DB', engineCode ? 'app' : undefined); }, close: async () => { await worker.dispose(); await rm(directory, { recursive: true, force: true }); assert.deepEqual(unexpected, [], 'Unexpected outbound requests'); } };
   } catch (error) {
     await worker?.dispose(); await rm(directory, { recursive: true, force: true }); throw error;

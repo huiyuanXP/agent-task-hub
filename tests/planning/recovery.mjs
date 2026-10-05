@@ -279,5 +279,4 @@ try {
   console.log('PASS: due ordering uses delivery lease expiry when replaying crashed attempts');
 } finally { await f.close(); }
 
-
-
+await import('./recovery-delivery-review.mjs');

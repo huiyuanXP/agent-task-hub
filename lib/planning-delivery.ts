@@ -24,9 +24,6 @@ export async function discoverDeliveries(db: D1Database, owner?: string, jobId?:
     .bind(...(owner ? [owner] : []), ...(jobId ? [jobId] : [])).all<JobRow>();
   for (const job of results) {
     await db.batch([
-      db.prepare(`UPDATE planning_deliveries SET status='stopped',terminal_reason='subscription_inactive',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=?
-        WHERE job_id=? AND owner=? AND generation=? AND status IN ('pending','retrying','delivering') AND NOT (${activeTarget})`)
-        .bind(now,job.id,job.owner,job.generation,now),
       db.prepare(`INSERT OR IGNORE INTO planning_deliveries(id,owner,job_id,subscription_id,generation,event_id,status,next_attempt_at,created_at,updated_at)
         SELECT j.id || ':' || s.id || ':' || j.generation,j.owner,j.id,s.id,j.generation,json_extract(j.event,'$.eventId'),'pending',?,?,?
         FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner JOIN subscriptions s ON s.owner=j.owner
@@ -56,11 +53,26 @@ export async function refreshDeliverySummary(db: D1Database, jobId: string, owne
 
 export async function deliverDue(db: D1Database, owner?: string, jobId?: string) {
   const now=Date.now();
-  // Invalidate stale generation/claim tokens before considering due work.
-  await db.prepare(`UPDATE planning_deliveries SET status='stopped',terminal_reason='job_inactive',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=?
-    WHERE status IN ('pending','retrying','delivering') AND NOT (${currentQueued})`).bind(now).run();
-  await db.prepare(`UPDATE planning_deliveries SET status='stopped',terminal_reason='subscription_inactive',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=?
-    WHERE status IN ('pending','retrying','delivering') AND NOT (${activeTarget})`).bind(now,now).run();
+  // One shared cleanup budget covers both reasons. Stopped rows leave the
+  // candidate set, so the next tick continues in updated_at/id order. Delivery
+  // guards remain authoritative even when cleanup leaves a dormant backlog.
+  const { results: invalidated } = await db.prepare(`
+    UPDATE planning_deliveries SET status='stopped',
+      terminal_reason=CASE WHEN NOT (${currentQueued}) THEN 'job_inactive' ELSE 'subscription_inactive' END,
+      delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=?
+    WHERE id IN (
+      SELECT id FROM planning_deliveries
+      WHERE status IN ('pending','retrying','delivering')
+        AND (NOT (${currentQueued}) OR NOT (${activeTarget}))
+        ${owner ? 'AND owner=?' : ''} ${jobId ? 'AND job_id=?' : ''}
+      ORDER BY updated_at,id LIMIT 50
+    ) RETURNING job_id,owner`)
+    .bind(now, now, ...(owner ? [owner] : []), ...(jobId ? [jobId] : []))
+    .all<{ job_id: string; owner: string }>();
+  const changedJobs = new Map(invalidated.map(row => [row.job_id, row.owner]));
+  for (const [id, jobOwner] of changedJobs) {
+    await refreshDeliverySummary(db, id, jobOwner);
+  }
   const {results}=await db.prepare(`SELECT * FROM planning_deliveries WHERE ((status IN ('pending','retrying') AND next_attempt_at<=?) OR (status='delivering' AND delivery_lease<=?))
     ${owner ? 'AND owner=?' : ''} ${jobId ? 'AND job_id=?' : ''} ORDER BY CASE WHEN status='delivering' THEN delivery_lease ELSE next_attempt_at END,id LIMIT 20`)
     .bind(now,now,...(owner ? [owner] : []),...(jobId ? [jobId] : [])).all<DeliveryRow>();
@@ -70,19 +82,19 @@ export async function deliverDue(db: D1Database, owner?: string, jobId?: string)
 async function attemptDelivery(db: D1Database, row: DeliveryRow) {
   const now=Date.now(), token=crypto.randomUUID();
   if(row.attempts>=5) {
-    await db.prepare(`UPDATE planning_deliveries SET status='failed',terminal_reason='attempts_exhausted',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=? WHERE id=? AND ((status='delivering' AND delivery_lease<=?) OR (status IN ('pending','retrying') AND next_attempt_at<=?)) AND attempts>=5 AND ${currentQueued}`)
-      .bind(now,row.id,now,now).run();
+    await db.prepare(`UPDATE planning_deliveries SET status='failed',terminal_reason='attempts_exhausted',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=? WHERE id=? AND ((status='delivering' AND delivery_lease<=?) OR (status IN ('pending','retrying') AND next_attempt_at<=?)) AND attempts>=5 AND ${currentQueued} AND ${activeTarget}`)
+      .bind(now,row.id,now,now,now).run();
     await refreshDeliverySummary(db,row.job_id,row.owner); return;
   }
   const claimed=await db.prepare(`UPDATE planning_deliveries SET status='delivering',attempts=attempts+1,delivery_token=?,delivery_lease=?,updated_at=?
     WHERE id=? AND attempts<5 AND ((status IN ('pending','retrying') AND next_attempt_at<=?) OR (status='delivering' AND delivery_lease<=?)) AND ${currentQueued} AND ${activeTarget}`)
     .bind(token,now+30000,now,row.id,now,now,now).run();
   if(!claimed.meta.changes) return;
-  const context=await db.prepare(`SELECT j.event,s.body FROM planning_deliveries d JOIN jobs j ON j.id=d.job_id AND j.owner=d.owner
+  const context=await db.prepare(`SELECT j.event,s.body,d.attempts FROM planning_deliveries d JOIN jobs j ON j.id=d.job_id AND j.owner=d.owner
     JOIN records i ON i.id=j.idea_id AND i.owner=j.owner JOIN subscriptions s ON s.id=d.subscription_id AND s.owner=d.owner
     WHERE d.id=? AND d.delivery_token=? AND j.generation=d.generation AND j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.revision=j.idea_revision AND s.expires>?
     AND (COALESCE(json_extract(s.body,'$.args.project'),'')='' OR json_extract(s.body,'$.args.project')=json_extract(j.event,'$.data.project'))`)
-    .bind(row.id,token,Date.now()).first<{event:string;body:string}>();
+    .bind(row.id,token,Date.now()).first<{event:string;body:string;attempts:number}>();
   if(!context) return; // Acquired token will be invalidated by the next sweep.
   let status='failed', reason:string|null=null, http:number|null=null;
   try {
@@ -97,7 +109,9 @@ async function attemptDelivery(db: D1Database, row: DeliveryRow) {
     if(error instanceof CallbackError) {reason=error.reason; http=error.status;}
     else {status='retrying';reason='network_or_timeout';}
   }
-  const completedAt=Date.now(), attempts=row.attempts+1;
+  // The selected row may predate a competing completed attempt. This count was
+  // read under our acquired token, after the atomic increment.
+  const completedAt=Date.now(), attempts=context.attempts;
   if(status==='retrying' && attempts>=5) {status='failed';reason='attempts_exhausted';}
   const next=status==='retrying' ? completedAt+30000*2**(attempts-1) : null;
   // Token + generation + current revision guards also protect accepted wake deadlines.
