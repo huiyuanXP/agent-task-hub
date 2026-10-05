@@ -85,10 +85,8 @@ Task2 expected effective-authorization projection (use actual domain helper, not
 
 ```ts
 const grant = await getAuthorization(db, {owner,actor:owner}, run.authorization_id);
-if (grant.runId !== run.id || grant.ticketId !== run.ticket_id || grant.ticketRevision !== run.ticket_revision) {
-  throw new ExecutionError('STORAGE_UNAVAILABLE','Task storage unavailable',503);
-}
-const authorization = {id:grant.id,run_id:grant.runId,ticket_id:grant.ticketId,
+const bound = grant.runId === run.id && grant.ticketId === run.ticket_id && grant.ticketRevision === run.ticket_revision;
+const authorization = bound ? {id:grant.id,run_id:grant.runId,ticket_id:grant.ticketId,
   ticket_revision:grant.ticketRevision,status:grant.status,effective_status:grant.effectiveStatus,
-  expires_at:grant.expiresAt,scope:grant.scope,budget:grant.budget};
+  expires_at:grant.expiresAt,scope:grant.scope,budget:grant.budget} : null;
 ```
