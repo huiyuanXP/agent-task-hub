@@ -17,7 +17,7 @@
 - Fresh isolated D1 only for tests; generated migrations and snapshot/journal must match db/schema.ts.
 - Exact owner/current revision/generation/CAS guards; API/MCP/UI never expose callback secrets or claim/delivery tokens in readonly metadata.
 - Timeout8s, delivery lease30s, retry30/60/120/240s,5 attempts; accepted wake5min, planning lease10min,3 automatic recoveries, manual cooldown60s.
-- Request/backfill discovery50 jobs per invocation, scheduled outbound20 targets per tick; stable event ID within a generation; cron */1 * * * *.
+- Request/backfill discovery50 jobs per invocation, invalidation50 target rows total per invocation with owner/job scope, scheduled outbound20 targets per tick; stable event ID within a generation; cron */1 * * * *.
 - No implicit execution or approval; no placeholder implementation. Runtime shape/type validation at new/modified inputs.
 
 ### Task 1: Durable delivery and scheduled recovery engine
@@ -43,3 +43,43 @@
 - [ ] Write/observe RED real Chromium recovery states before UI behavior edits, then prove lease countdown/expired retry/permanent and backoff status. Tests only loopback with network policy; synthetic state belongs in fixtures.
 - [ ] Update operator docs describing cron, migrations, at-least-once event IDs, bounds/manual retry, exact statuses and scope; add default/hosted check entrypoints if necessary.
 - [ ] Run covering Worker/Chromium plus build, lint, tsc and full npm test. Self-review, commit as strix agent, full report with evidence and concerns. No push/PR/subagents; controller performs task and whole-issue review.
+
+## Shared interfaces and behavioral anchors
+
+Task1's implemented lifecycle functions are in `lib/planning-recovery.ts`. Task2 reads the Task1 report for authoritative parameter/result details; an internal JobRow must never become a public response.
+
+```ts
+planningMetadata(job: JobRow, db?: D1Database, now?: number): Promise<PlanningMetadata>
+retryPlanningJob(jobId: string, owner: string, db?: D1Database): Promise<JobRow | null>
+backfillPlanning(owner: string, db?: D1Database): Promise<void>
+deliverJob(jobId: string, owner: string): Promise<void>
+scheduledPlanning(db?: D1Database): Promise<void>
+```
+
+Public job projection anchor (metadata last; do not spread authoritative storage rows):
+
+```ts
+const job = { id: current.id, idea_id: current.idea_id,
+  idea_revision: current.idea_revision, created: current.created,
+  result: current.result, ...await planningMetadata(current, db) };
+return Response.json({job});
+```
+
+Lifecycle RED/GREEN anchor, using literal behavior expectations and real fixture SQL only for elapsed time:
+
+```js
+const claimed = (await rpc('claim_planning_job', {job_id})).result.structuredContent;
+const active = await request('/api/planning', {ideaId});
+assert.equal(active.body.job.status, 'planning');
+assert.equal(active.body.job.retry_allowed, false);
+await db.prepare('UPDATE jobs SET lease=? WHERE id=?').bind(Date.now()-1,job_id).run();
+const visible = await request('/api/planning');
+const expired = visible.body.jobs.find(job=>job.id===job_id);
+assert.equal(expired.status, 'expired');
+assert.equal(expired.retry_allowed, true);
+assert.ok(!JSON.stringify(expired).includes(claimed.claim_token));
+const concurrent = await Promise.all([request('/api/planning',{ideaId}),request('/api/planning',{ideaId})]);
+assert.ok(concurrent.every(response=>response.status===200));
+const row = await db.prepare('SELECT generation FROM jobs WHERE id=?').bind(job_id).first();
+assert.equal(row.generation, 1);
+```
