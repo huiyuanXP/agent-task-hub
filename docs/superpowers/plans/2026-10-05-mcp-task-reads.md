@@ -84,9 +84,11 @@ ORDER BY created DESC,id DESC,source DESC LIMIT ?
 Task2 expected effective-authorization projection (use actual domain helper, not persisted status alone):
 
 ```ts
-const grant = await getAuthorization(db, {owner,actor:owner}, run.authorization_id);
+const grant = await getAuthorization(db, {owner,actor:owner,registry:trustedRegistry()}, run.authorization_id);
 const bound = grant.runId === run.id && grant.ticketId === run.ticket_id && grant.ticketRevision === run.ticket_revision;
 const authorization = bound ? {id:grant.id,run_id:grant.runId,ticket_id:grant.ticketId,
   ticket_revision:grant.ticketRevision,status:grant.status,effective_status:grant.effectiveStatus,
   expires_at:grant.expiresAt,scope:grant.scope,budget:grant.budget} : null;
 ```
+
+Main integration: upstream PR36 adds current server EXECUTION_REGISTRY and version2 backend_attestations/execution_permits in migration0006. Task2 preserves their model, lazily supplies configuredRegistry to authorization presentation, and includes safe diagnostic summaries for failed/cancelled Runs whose main evidence column is null. All new tables are included in readonly snapshots; no dispatch/physical execution is needed to create synthetic model fixtures.
