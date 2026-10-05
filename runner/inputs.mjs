@@ -12,7 +12,7 @@ async function directory(path) {
     return last;
   } finally { await Promise.all(handles.map(handle => handle.close())); }
 }
-export async function snapshotInputs(sourceRoot, manifests, policy) {
+export async function snapshotInputs(sourceRoot, manifests, policy, staticAssets = false) {
   if (!Array.isArray(manifests) || !manifests.length || manifests.length > 1024) throw Error('Invalid input manifest');
   manifests = manifests.map(item => { exact(item, ['path', 'sha256', 'bytes']); return { ...item }; });
   let total = 0; const seen = new Set();
@@ -28,7 +28,8 @@ export async function snapshotInputs(sourceRoot, manifests, policy) {
     for (const item of manifests) {
       const handles = []; let parent = root;
       try {
-        const parts = item.path.split('/');
+        const parts = item.path.split('/').slice(staticAssets ? 1 : 0);
+        if (staticAssets && !item.path.startsWith('input/assets/')) throw Error('Static assets prefix required');
         for (const part of parts.slice(0, -1)) { parent = await open(`/proc/self/fd/${parent.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); handles.push(parent); }
         // NONBLOCK avoids hanging on FIFOs before fstat can reject them.
         const file = await open(`/proc/self/fd/${parent.fd}/${parts.at(-1)}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

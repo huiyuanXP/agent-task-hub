@@ -1,14 +1,7 @@
 import { boundedId, exactObject, invalid, positiveInteger } from './errors.mts';
-import type { OperationScope, PrepareExecutionInput, ResourceBudget } from './authorization-types.mts';
-import { RESOURCE_CEILINGS } from './catalog.mts';
-export function validateBudget(value: unknown): asserts value is ResourceBudget {
-  exactObject(value, ['timeoutMs', 'memoryMb', 'cpus', 'pids']);
-  for (const key of ['timeoutMs', 'memoryMb', 'cpus', 'pids'] as const) {
-    const number = value[key];
-    if (typeof number !== 'number' || !Number.isFinite(number) || number <= 0 || number > RESOURCE_CEILINGS[key]) invalid('Invalid resource budget');
-    if (key !== 'cpus') positiveInteger(number);
-  }
-}
+import type { OperationScope, PrepareExecutionInput } from './authorization-types.mts';
+export { validateResourceBudget as validateBudget } from './registry.mts';
+import { validateResourceBudget as validateBudget } from './registry.mts';
 export function validateScope(value: unknown): asserts value is OperationScope[] {
   if (!Array.isArray(value) || value.length !== 1) invalid('Exactly one operation is required');
   for (const binding of value) {

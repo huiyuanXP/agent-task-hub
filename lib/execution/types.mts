@@ -1,3 +1,4 @@
+import type { BackendAttestation } from './attestations.mts';
 /** Structural D1 interface: no Worker runtime imports in the domain. */
 export interface ExecutionStatement {
   bind(...values: (string | number | null)[]): ExecutionStatement;
@@ -32,7 +33,8 @@ export interface EvidenceClaims {
   startedAt: string;
   endedAt: string;
 }
-export interface ExecutionEvidence { claims: EvidenceClaims; signature: string }
+export interface LegacyExecutionEvidence { claims: EvidenceClaims; signature: string }
+export type ExecutionEvidence = LegacyExecutionEvidence | BackendAttestation;
 export interface EvidenceTrust { keyId: string; key: CryptoKey }
 /** Constructed only by trusted server code, never from the request body. */
 export interface RunContext { owner: string; actor: string; evidenceTrust?: EvidenceTrust }

@@ -1,3 +1,4 @@
+import { handleCheckpoint } from '../lib/execution/backend-http.mts';
 import { authenticateRequest } from "../lib/authentication";
 import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
@@ -10,6 +11,7 @@ export default {
     await scheduledPlanning(env.DB);
   },
   fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    if (new URL(request.url).pathname === '/api/execution/checkpoint') return handleCheckpoint(request, env);
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.

@@ -63,3 +63,15 @@ export const authRevocations = sqliteTable('auth_revocations', {
   expiresAt: integer('expires_at').notNull(),
   createdAt: integer('created_at').notNull(),
 }, t => [index('auth_revocations_expiry').on(t.expiresAt)]);
+
+/** A null closedAt is the physical Ticket reservation, independent of Run state. */
+export const executionPermits = sqliteTable('execution_permits', {
+  id: text('id').primaryKey().notNull(), owner: text('owner').notNull(), runId: text('run_id').notNull(), ticketId: text('ticket_id').notNull(),
+  authorizationId: text('authorization_id').notNull(), envelope: text('envelope').notNull(), envelopeHash: text('envelope_hash').notNull(),
+  createdAt: integer('created_at').notNull(), deadlineMs: integer('deadline_ms').notNull(), cancelRequested: integer('cancel_requested').notNull().default(0), closedAt: integer('closed_at'),
+}, t => [uniqueIndex('execution_permits_run').on(t.owner,t.runId), uniqueIndex('execution_permits_physical_ticket').on(t.owner,t.ticketId).where(sql`${t.closedAt} IS NULL`),
+  check('execution_permits_envelope', sql`json_valid(${t.envelope}) AND length(${t.envelope}) <= 1048576`), check('execution_permits_cancel', sql`${t.cancelRequested} IN (0,1)`), check('execution_permits_deadline', sql`${t.deadlineMs} > ${t.createdAt}`)]);
+export const backendAttestations = sqliteTable('backend_attestations', {
+  id: text('id').primaryKey().notNull(), permitId: text('permit_id').notNull(), owner: text('owner').notNull(), purpose: text('purpose').notNull(),
+  receipt: text('receipt').notNull(), receivedAt: integer('received_at').notNull(),
+}, t => [uniqueIndex('backend_attestations_permit_purpose').on(t.permitId,t.purpose), check('backend_attestations_receipt', sql`json_valid(${t.receipt}) AND length(${t.receipt}) <= 16000`), check('backend_attestations_purpose', sql`${t.purpose} IN ('result','cancel_fence','stop')`)]);

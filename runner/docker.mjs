@@ -49,7 +49,7 @@ export function assertOwned(object, state) {
 }
 export function containerConfig(state, importing = false) {
   const p = state.policy;
-  return { Image: IMAGE, User: '1000:1000', WorkingDir: '/job', Entrypoint: ['node'], Cmd: ['-e', 'setInterval(()=>{},1000)'], Env: PROXY_KEYS.map(key => `${key}=`), Labels: labels(state), NetworkDisabled: true,
+  return { Image: state.image ?? IMAGE, User: '1000:1000', WorkingDir: '/job', Entrypoint: ['node'], Cmd: ['-e', 'setInterval(()=>{},1000)'], Env: PROXY_KEYS.map(key => `${key}=`), Labels: labels(state), NetworkDisabled: true,
     HostConfig: { NetworkMode: 'none', ReadonlyRootfs: true, CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges:true'], Memory: p.ceilings.memoryMb * 1048576, MemorySwap: p.ceilings.memoryMb * 1048576, NanoCpus: Math.floor(p.ceilings.cpus * 1e9), PidsLimit: p.ceilings.pids, ShmSize: 8 * 1048576, LogConfig: { Type: 'none' }, RestartPolicy: { Name: 'no' },
       Mounts: [{ Type: 'volume', Source: state.volumeName, Target: '/job/input', ReadOnly: !importing, VolumeOptions: { NoCopy: true } }],
       Tmpfs: { '/job/output': `rw,noexec,nosuid,nodev,size=${p.workTmpfsMb}m,uid=1000,gid=1000,mode=0700`, '/tmp': 'rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0700' } } };
@@ -89,12 +89,13 @@ export async function removeVolume(name, state) {
 }
 /** Raw daemon exec identity is suitable for durable Task4 journaling before start. */
 export async function createExec(containerId, argv) {
-  if (!Array.isArray(argv) || !argv.length || argv.length > 32 || argv.some(value => typeof value !== 'string' || value.includes('\0')) || Buffer.byteLength(JSON.stringify(argv)) > 65536) throw Error('Invalid fixed argv');
+  if (!Array.isArray(argv) || !argv.length || argv.length > 64 || argv.some(value => typeof value !== 'string' || value.includes('\0')) || Buffer.byteLength(JSON.stringify(argv)) > 262144) throw Error('Invalid fixed argv');
   return request('POST', `/containers/${containerId}/exec`, { body: { AttachStdout: true, AttachStderr: true, Tty: false, User: '1000:1000', WorkingDir: '/job', Cmd: argv } });
 }
 export function inspectExec(id) { return request('GET', `/exec/${id}/json`); }
-export async function startExec(id, { timeoutMs, maxLogBytes }) {
+export async function startExec(id, { timeoutMs, maxLogBytes, onStarted }) {
   const stream = await request('POST', `/exec/${id}/start`, { body: { Detach: false, Tty: false }, stream: true, timeoutMs });
+  if (onStarted) { try { await onStarted(Date.now()); } catch (error) { stream.destroy(); throw error; } }
   const chunks = [[], []], sizes = [0, 0], totals = [0, 0];
   let pending = Buffer.alloc(0), remaining = 0, channel = 0;
   const snapshot = () => ({ stdout: Buffer.concat(chunks[0]), stderr: Buffer.concat(chunks[1]), stdoutTruncated: totals[0] > maxLogBytes, stderrTruncated: totals[1] > maxLogBytes });
