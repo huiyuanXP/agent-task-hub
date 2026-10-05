@@ -140,3 +140,40 @@ The following decisions were made under the user’s authorization to proceed au
 - An expired planning claim without an active matching subscription clears its old token and persists a fresh generation/reason without spending automatic recoveries — the no-subscription rule must preserve recovery budget while revoking expired authority — if wrong, unattended poll-only consumers can exceed the usual recovery-generation budget; same-owner CAS/current revision guards still bound authority. Queued no-subscription ticks must not repeatedly regenerate.
 - An accepted event's wake deadline survives subscription expiry; only when due may an unclaimed disconnected job create one fresh generation without spending automatic recoveries — same subscription refresh before5minutes must retain accepted event/generation, after deadline must be able to wake again — if wrong, disconnect/reconnect loops can create budget-free generations at the acknowledgement interval; repeated no-subscription cron must not churn and exhausted jobs remain terminal. Implementer identified actual stuck reconnect path and adds RED/covering checks before commit.
 - Limit invalidation to50 targetrows TOTAL per deliverDue, stable ordering and optionalowner/jobscope — specrequiresboundedhousekeeping butdidn'tgivea targetcap;50 matchesdiscoverybatchscale — if wrong, dormantcleanup takesadditionalticks; currentQueued/activeTarget sendguards must remain independent of cleanup.
+
+## #11 — Readonly MCP Ticket, Plan and Run queries
+
+Added five owner-scoped tools: `list_tickets`, `get_ticket`, `list_plans`, `get_plan`
+and `list_ticket_runs`. Exact runtime schemas, canonical context-bound keysets and
+safe known-field DTOs preserve the existing protocol and verified identity boundary.
+Details retain current/original Idea revision context and first-20 linked pages.
+Manual Runs remain snapshots; actual execution Runs expose immutable contracts,
+safe version 1/version 2 evidence and bounded failed/cancel/stop history. Effective
+grant status comes from the existing authorization domain and current configured
+registry, resolved only for a same-owner bound grant. Reads never claim, approve,
+execute, renew, audit or alter budgets. Both locks and existing execution/planning
+implementations remain unchanged.
+
+Actual Worker/fresh-D1/signed-JWT regressions exercise stored-type guards, cross-owner
+links, same-ID/source ties, continuation, all effective grant states, safe nested
+projection, current custom registries and lazy malformed-configuration isolation.
+Model fixtures use synthetic signed receipts and attestations without physical
+Ticket execution. All persistent user tables are compared before and after reads.
+The combined suites are included in default testing and explicit hosted CI.
+[MCP-TASK-READS.md](MCP-TASK-READS.md) documents the final public contract. Detailed
+RED/GREEN and final validation evidence is retained in ignored
+`.superpowers/sdd/2026-10-05-mcp-task-reads/`. Mandatory full hosted Docker acceptance
+is preserved; local absence of that prerequisite is disclosed in the task report.
+
+## #11 final review and controller verification
+
+Task reviews and scoped fixes plus the complete independent source review approve all five readonly tools with no Critical or Important findings. Stored JSON text guards and strict numeric authorization expiry are covered by actual Worker RED/GREEN regressions. The controller fast-forwarded the primary checkout, then completed a fresh build, combined Ticket/Plan/Run checks, malformed execution-registry isolation, lint and TypeScript with exit 0. Both locks are unchanged. Full hosted Docker/backend acceptance remains required before this issue is merged. The local full npm attempt stopped at missing Docker prerequisites and was terminated with exit 143; it was not a completed passing suite.
+
+Implementation decisions made under the user’s authorization to proceed autonomously:
+
+- Use owner-scoped D1 keyset queries rather than proxying full records API — bounded pagination and exact nested privacy need explicit queries — if wrong, maintain a new query module instead of one reused transport.
+- Cursors are unsigned context-bound positions with mandatory SQL owner predicates — they carry no authority and signing would require new secret management — if wrong, owners can forge positions within their own authorized data, never cross-owner access.
+- Manual snapshots use state snapshot and preserve their reported status/evidence separately — a user-reported done value must not imply verified execution — if wrong, clients adapt to an explicit source/state distinction instead of one shared status enum.
+- Missing/unowned/mismatched linked authorization is null while the owned Run stays readable — relationship corruption must not reveal another grant or erase unrelated owned evidence — if wrong, clients cannot distinguish an absent grant from an invalid binding through this compact read interface; authoritative grant tool remains separately owner-scoped. Task2spec/planclarified; Task1scopeunchanged.
+- Resolve current trusted registry lazily only when a bound authorization is presented, and fail CONFIGURATION_UNAVAILABLE503 on malformed configuration instead of silently using defaults — current operation definitions determine effective grant status — if wrong, bound-grant pages are unavailable during bad registry config, while unrelated reads remain usable.
+- Include safe v2 result/cancel/stop diagnostics from owner/run/ticket-bound immutable backend evidence, alongside v1 receipts and manual snapshots — current main stores failure evidence outside execution_runs.evidence — if wrong, the Run query maintains one extra readonly join, but no dispatch/permit/signature data is exposed.

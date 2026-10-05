@@ -1,3 +1,4 @@
+import { TASK_READ_ENVELOPE_BYTES } from '../../lib/task-reads/bounds.mts';
 import { getAuthenticationContext } from '../../lib/auth-context';
 import { readBody } from '../../lib/execution/http.mts';
 import { dispatchWorkerTool, workerTools } from '../../lib/execution/worker-mcp.mts';
@@ -26,6 +27,7 @@ import {
   deliverJob,
 } from "../../lib/events";
 import { dispatchExecutionTool, executionTools } from "../../lib/execution/mcp.mts";
+import { dispatchTaskReadTool, taskReadTools } from "../../lib/task-reads/mcp.mts";
 import { ExecutionError } from "../../lib/execution/errors.mts";
 const object = (
   properties: Record<string, JsonSchema>,
@@ -172,7 +174,8 @@ export async function POST(req: Request) {
     );
     const respond = (result: Record<string, unknown>) => {
       const envelope = { jsonrpc: "2.0", id, result: { resultType: "complete", ...result } };
-      if (new TextEncoder().encode(JSON.stringify(envelope)).length > 1048576) throw new ExecutionError("BODY_TOO_LARGE", "MCP result exceeds bound", 413);
+      const responseLimit = !worker && method === "tools/call" && taskReadTools.some(tool => tool.name === p.name) ? TASK_READ_ENVELOPE_BYTES : 1048576;
+      if (new TextEncoder().encode(JSON.stringify(envelope)).length > responseLimit) throw new ExecutionError("BODY_TOO_LARGE", "MCP result exceeds bound", 413);
       return Response.json(
         envelope,
         { headers: { "Cache-Control": "no-store" } },
@@ -197,12 +200,13 @@ export async function POST(req: Request) {
     if (method === "notifications/initialized")
       return new Response(null, { status: 202 });
     if (method === "ping") return respond({});
-    if (method === "tools/list") return respond({ tools: worker ? workerTools : [...tools, ...executionTools] });
+    if (method === "tools/list") return respond({ tools: worker ? workerTools : [...tools, ...executionTools, ...taskReadTools] });
     if (worker) {
       if (method !== "tools/call") throw new ExecutionError("AUTHORIZATION_DENIED", "Worker capability denied", 403);
       const result = await dispatchWorkerTool(database(), worker, p.name as string, p.arguments, env);
       return respond({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
     }
+
     if (method === "events/list") return respond({ events: [eventDef] });
     const user = await getChatGPTUser();
     console.info(
@@ -347,6 +351,10 @@ export async function POST(req: Request) {
         id,
         error: { code: -32601, message: "Method not found" },
       });
+    const taskReadResult = await dispatchTaskReadTool(db, owner, p.name as string, p.arguments, () => configuredRegistry(env));
+    if (taskReadResult !== undefined) return respond({
+      content: [{ type: "text", text: JSON.stringify(taskReadResult) }], structuredContent: taskReadResult, isError: false,
+    });
     const executionResult = await dispatchExecutionTool(db, () => ({ owner, actor: owner, grantAuthority: "owner", registry: configuredRegistry(env) }), p.name as string, p.arguments);
     if (executionResult !== undefined) return respond({
       content: [{ type: "text", text: JSON.stringify(executionResult) }], structuredContent: executionResult, isError: false,

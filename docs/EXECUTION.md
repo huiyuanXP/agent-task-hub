@@ -502,7 +502,10 @@ never extends its original deadline or invents another physical identity.
 MCP retains initialize version negotiation, initialized notifications, ping and
 JSON-RPC envelopes. Worker request bodies are bounded at 16 KiB; existing owner
 planning requests retain a 256 KiB ceiling. Complete response envelopes are
-bounded at 1 MiB, stored action responses at 512 KiB, with bounded public errors.
+bounded at 1 MiB for workers and existing execution/planning tools; the five
+owner task-read tools use a separately measured 4 MiB cap with complete-item
+cursor pagination (see [MCP-TASK-READS.md](MCP-TASK-READS.md)). Stored action
+responses are bounded at 512 KiB, with bounded public errors.
 A single maximum 80,000-codepoint frozen Ticket fits including the duplicated
 MCP text/structured result. Owner lists accept a limit up to 100 and Ticket/state
 filters; oversized aggregate results return `BODY_TOO_LARGE`. Use a smaller

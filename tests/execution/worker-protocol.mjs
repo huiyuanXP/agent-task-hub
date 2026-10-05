@@ -15,9 +15,11 @@ try {
         assert.equal((await rpc('initialize', { protocolVersion: version })).data.result.protocolVersion, version);
     const names = (await rpc('tools/list')).data.result.tools.map(t => t.name);
     assert.ok(names.includes('claim_execution_run'));
+    assert.equal(names.length, 8);
+    for (const name of ['get_ticket', 'get_plan', 'list_tickets', 'list_plans', 'list_ticket_runs']) assert.ok(!names.includes(name));
     assert.ok(!names.includes('prepare_execution'));
-    for (const name of ['prepare_execution', 'decide_authorization', 'create_idea', 'list_planning_jobs', 'get_idea', 'revoke_authorization'])
-        assert.ok((await rpc('tools/call', { name, arguments: {} })).data.error, name);
+    for (const name of ['prepare_execution', 'decide_authorization', 'create_idea', 'list_planning_jobs', 'get_idea', 'revoke_authorization', 'get_ticket', 'get_plan', 'list_tickets', 'list_plans', 'list_ticket_runs'])
+        assert.equal((await rpc('tools/call', { name, arguments: {} })).data.error?.data.code, 'AUTHORIZATION_DENIED', name);
     for (const path of ['/api/records', '/api/session', '/api/authorization', '/api/execution', '/api/planning', '/api/execution/workers'])
         assert.equal((await f.api(path, undefined, token)).status, 401, path);
     assert.equal((await f.api('/api/execution/checkpoint', { permitId: 'x' }, token)).status, 401);
@@ -28,6 +30,7 @@ try {
     assert.ok((await rpc('tools/list', {}, token, { 'cf-access-jwt-assertion': f.alice })).data.result.tools.every(t => !t.name.includes('authorization')));
     const simultaneous = await Promise.all([rpc('tools/list', {}, f.alice), rpc('tools/list')]);
     assert.ok(simultaneous[0].data.result.tools.some(t => t.name === 'prepare_execution'));
+    for (const name of ['get_ticket', 'get_plan', 'list_tickets', 'list_plans', 'list_ticket_runs']) assert.ok(simultaneous[0].data.result.tools.some(t => t.name === name));
     assert.ok(!simultaneous[1].data.result.tools.some(t => t.name === 'prepare_execution'));
     assert.equal((await rpc('ping', {}, 'athl1.fake.1.' + secret)).status, 401);
     assert.equal((await rpc('ping', {}, 'athw2.' + input.credentialId + '.' + secret, { 'cf-access-jwt-assertion': f.alice })).status, 401);
@@ -38,12 +41,14 @@ try {
     assert.equal((await f.api('/api/execution/workers', { ...input, verifier: 'a'.repeat(64) })).status, 409);
     const claimSecret = randomBytes(32).toString('base64url'), claim = { runId: run.id, leaseId: crypto.randomUUID(), requestId: crypto.randomUUID(), verifier: createHash('sha256').update(claimSecret).digest('hex'), mode: 'execute' };
     const call = async (name, args) => rpc('tools/call', { name, arguments: args });
-    const competing = await Promise.all([call('claim_execution_run', claim), call('claim_execution_run', { ...claim, leaseId: crypto.randomUUID(), requestId: crypto.randomUUID() })]);
+    const choices = [claim, { ...claim, leaseId: crypto.randomUUID(), requestId: crypto.randomUUID() }];
+    const competing = await Promise.all(choices.map(input => call('claim_execution_run', input)));
     assert.equal(competing.filter(r => r.data.result).length, 1);
+    const winner = choices[competing.findIndex(r => r.data.result)];
     const success = competing.find(r => r.data.result).data.result.structuredContent;
     assert.equal(success.generation, 1);
-    assert.equal((await call('claim_execution_run', claim)).data.result.structuredContent.generation, 1);
-    const leaseToken = 'athl1.' + claim.leaseId + '.1.' + claimSecret;
+    assert.equal((await call('claim_execution_run', winner)).data.result.structuredContent.generation, 1);
+    const leaseToken = 'athl1.' + winner.leaseId + '.1.' + claimSecret;
     const foreignSecret = randomBytes(32).toString('base64url'), foreignId = crypto.randomUUID();
     const foreignIssued = await f.api('/api/execution/workers', { ...input, credentialId: foreignId, requestId: foreignId, verifier: createHash('sha256').update(foreignSecret).digest('hex') });
     assert.equal(foreignIssued.status, 201);
