@@ -75,3 +75,22 @@ export const backendAttestations = sqliteTable('backend_attestations', {
   id: text('id').primaryKey().notNull(), permitId: text('permit_id').notNull(), owner: text('owner').notNull(), purpose: text('purpose').notNull(),
   receipt: text('receipt').notNull(), receivedAt: integer('received_at').notNull(),
 }, t => [uniqueIndex('backend_attestations_permit_purpose').on(t.permitId,t.purpose), check('backend_attestations_receipt', sql`json_valid(${t.receipt}) AND length(${t.receipt}) <= 16000`), check('backend_attestations_purpose', sql`${t.purpose} IN ('result','cancel_fence','stop')`)]);
+
+export const executionWorkerCredentials = sqliteTable('execution_worker_credentials', {
+  id:text('id').primaryKey().notNull(), owner:text('owner').notNull(), issuedBy:text('issued_by').notNull(), principalId:text('principal_id').notNull(),
+  runId:text('run_id').notNull(), ticketId:text('ticket_id').notNull(), ticketRevision:integer('ticket_revision').notNull(), attempt:integer('attempt').notNull(), authorizationId:text('authorization_id').notNull(),
+  verifier:text('verifier').notNull(), label:text('label').notNull(), requestId:text('request_id').notNull(), inputKey:text('input_key').notNull(),
+  mode:text('mode').notNull(), origin:text('origin').notNull(), issuer:text('issuer'), audience:text('audience'), email:text('email').notNull(), tokenHash:text('token_hash'),
+  createdAt:integer('created_at').notNull(), expiresAt:integer('expires_at').notNull(), revokedAt:integer('revoked_at'), revokedBy:text('revoked_by'), revokeRequestId:text('revoke_request_id'),
+},t=>[uniqueIndex('execution_workers_owner_request').on(t.owner,t.requestId),index('execution_workers_run').on(t.owner,t.runId,t.expiresAt),
+  check('execution_workers_expiry',sql`${t.expiresAt}>${t.createdAt} AND ${t.expiresAt}<=${t.createdAt}+900000`),check('execution_workers_verifier',sql`length(${t.verifier})=64`)]);
+export const executionLeases = sqliteTable('execution_leases', {
+ id:text('id').primaryKey().notNull(),owner:text('owner').notNull(),runId:text('run_id').notNull(),credentialId:text('credential_id').notNull(),principalId:text('principal_id').notNull(),
+ generation:integer('generation').notNull(),mode:text('mode').notNull(),verifier:text('verifier').notNull(),requestId:text('request_id').notNull(),inputKey:text('input_key').notNull(),createdAt:integer('created_at').notNull(),expiresAt:integer('expires_at').notNull(),
+},t=>[uniqueIndex('execution_leases_generation').on(t.owner,t.runId,t.generation),uniqueIndex('execution_leases_request').on(t.credentialId,t.requestId),index('execution_leases_active').on(t.owner,t.runId,t.expiresAt),check('execution_leases_mode',sql`${t.mode} IN ('execute','reconcile')`)]);
+export const executionWorkerActions = sqliteTable('execution_worker_actions', {
+ leaseId:text('lease_id').notNull(),requestId:text('request_id').notNull(),inputKey:text('input_key').notNull(),action:text('action').notNull(),response:text('response'),createdAt:integer('created_at').notNull(),
+},t=>[uniqueIndex('execution_worker_actions_request').on(t.leaseId,t.requestId),check('execution_worker_response',sql`${t.response} IS NULL OR (json_valid(${t.response}) AND length(${t.response})<=524288)`)]);
+export const executionWorkerChecks = sqliteTable('execution_worker_checks', {
+ id:text('id').primaryKey().notNull(),valid:integer('valid').notNull(),
+},t=>[check('execution_worker_authority',sql`${t.valid}=1`)]);

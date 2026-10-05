@@ -1,3 +1,5 @@
+import { getRun, listRuns } from './runs.mts';
+import type { ListRunFilters } from './types.mts';
 import type { ExecutionDatabase } from './types.mts';
 import type { AuthorizationContext, DecisionInput, PrepareExecutionInput, RevokeInput } from './authorization-types.mts';
 import { decideAuthorization, getAuthorization, prepareExecution, revokeAuthorization } from './authorization.mts';
@@ -11,6 +13,8 @@ const scope = { type: 'array', minItems: 1, maxItems: 1, items: object({ operati
 const read = { readOnlyHint: true, openWorldHint: false };
 const write = { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false };
 export const executionTools = [
+  { name: 'get_execution_run', description: 'Read one owned frozen execution Run for explicit delegation selection.', inputSchema: object({ runId: string }), annotations: read },
+  { name: 'list_execution_runs', description: 'List owned execution Runs with bounded filters.', inputSchema: object({ ticketId: string, state: { type: 'string', enum: ['queued','running','waiting','succeeded','failed','cancelled'] }, limit: { ...integer, maximum: 100 } }, []), annotations: read },
   { name: 'get_operation_catalog', description: 'Read owned Ticket revision and real fixed operation definitions. Catalog hashes bind the exact frozen input; this does not grant execution.', inputSchema: object({ ticketId: string, expectedRevision: integer }), annotations: read },
   { name: 'prepare_execution', description: 'Atomically reserve a queued Run and pending authorization for one exact catalog operation, resource budget and latest-start expiry. Use a stable requestId; no process starts.', inputSchema: object({ ticketId: string, expectedRevision: integer, requestId: string, attempt: integer, scope, budget, expiresAt: integer }), annotations: write },
   { name: 'get_authorization', description: 'Read owned immutable scope, budget, decision audit and effective pending/approved/rejected/revoked/expired/stale status.', inputSchema: object({ authorizationId: string }), annotations: read },
@@ -19,6 +23,8 @@ export const executionTools = [
 ];
 /** Focused dispatcher: existing planning tools remain in their original route. */
 async function dispatch(db: ExecutionDatabase, context: AuthorizationContext, name: string, args: unknown): Promise<unknown> {
+  if (name === 'get_execution_run') { exactObject(args, ['runId']); return { run: await getRun(db, context.owner, args.runId as string) }; }
+  if (name === 'list_execution_runs') { exactObject(args, ['ticketId', 'state', 'limit']); return { runs: await listRuns(db, context.owner, args as ListRunFilters) }; }
   if (name === 'get_operation_catalog') {
     exactObject(args, ['ticketId', 'expectedRevision']);
     return getOperationCatalog(db, context, args as unknown as { ticketId: string; expectedRevision: number });

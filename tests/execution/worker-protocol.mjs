@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import { randomBytes, createHash } from 'node:crypto';
+import { consumerFixture } from './fixtures/consumer.mjs';
+const f = await consumerFixture();
+try {
+    const { run } = await f.prepare();
+    const secret = randomBytes(32).toString('base64url');
+    const input = { action: 'provision', credentialId: crypto.randomUUID(), requestId: crypto.randomUUID(), runId: run.id, verifier: createHash('sha256').update(secret).digest('hex'), label: 'real worker' };
+    const issued = await f.api('/api/execution/workers', input);
+    assert.equal(issued.status, 201, JSON.stringify(issued));
+    const token = 'athw1.' + input.credentialId + '.' + secret;
+    const rpc = async (method, params = {}, auth = token, headers = {}) => f.api('/mcp', { jsonrpc: '2.0', id: 1, method, params }, auth, headers);
+    assert.equal((await rpc('initialize')).data.result.capabilities.events, undefined);
+    for (const version of ['2026-07-28', '2025-03-26'])
+        assert.equal((await rpc('initialize', { protocolVersion: version })).data.result.protocolVersion, version);
+    const names = (await rpc('tools/list')).data.result.tools.map(t => t.name);
+    assert.ok(names.includes('claim_execution_run'));
+    assert.ok(!names.includes('prepare_execution'));
+    for (const name of ['prepare_execution', 'decide_authorization', 'create_idea', 'list_planning_jobs', 'get_idea', 'revoke_authorization'])
+        assert.ok((await rpc('tools/call', { name, arguments: {} })).data.error, name);
+    for (const path of ['/api/records', '/api/session', '/api/authorization', '/api/execution', '/api/planning', '/api/execution/workers'])
+        assert.equal((await f.api(path, undefined, token)).status, 401, path);
+    assert.equal((await f.api('/api/execution/checkpoint', { permitId: 'x' }, token)).status, 401);
+    assert.equal((await rpc('tools/list', {}, token, { cookie: 'CF_Authorization=' + f.alice })).status, 403);
+    assert.equal((await rpc('tools/list', {}, token, { 'sec-fetch-site': 'cross-site' })).status, 403);
+    assert.equal((await rpc('tools/list', {}, token, { 'cf-access-jwt-assertion': f.alice })).status, 401);
+    await f.configure({ EXECUTION_WORKER_MACHINE_INGRESS: '1' });
+    assert.ok((await rpc('tools/list', {}, token, { 'cf-access-jwt-assertion': f.alice })).data.result.tools.every(t => !t.name.includes('authorization')));
+    const simultaneous = await Promise.all([rpc('tools/list', {}, f.alice), rpc('tools/list')]);
+    assert.ok(simultaneous[0].data.result.tools.some(t => t.name === 'prepare_execution'));
+    assert.ok(!simultaneous[1].data.result.tools.some(t => t.name === 'prepare_execution'));
+    assert.equal((await rpc('ping', {}, 'athl1.fake.1.' + secret)).status, 401);
+    assert.equal((await rpc('ping', {}, 'athw2.' + input.credentialId + '.' + secret, { 'cf-access-jwt-assertion': f.alice })).status, 401);
+    assert.ok((await rpc('tools/call', { name: 'get_execution_run', arguments: { runId: 'foreign' } }, token, { 'oai-authenticated-user-id': 'foreign', 'oai-authenticated-user-email': 'foreign@example.test' })).data.error);
+    const invalid = await rpc('tools/list', {}, 'athw1.invalid.invalid', { 'cf-access-jwt-assertion': f.alice });
+    assert.equal(invalid.status, 401);
+    assert.equal((await f.api('/api/execution/workers', input, f.bob)).status, 404);
+    assert.equal((await f.api('/api/execution/workers', { ...input, verifier: 'a'.repeat(64) })).status, 409);
+    const claimSecret = randomBytes(32).toString('base64url'), claim = { runId: run.id, leaseId: crypto.randomUUID(), requestId: crypto.randomUUID(), verifier: createHash('sha256').update(claimSecret).digest('hex'), mode: 'execute' };
+    const call = async (name, args) => rpc('tools/call', { name, arguments: args });
+    const competing = await Promise.all([call('claim_execution_run', claim), call('claim_execution_run', { ...claim, leaseId: crypto.randomUUID(), requestId: crypto.randomUUID() })]);
+    assert.equal(competing.filter(r => r.data.result).length, 1);
+    const success = competing.find(r => r.data.result).data.result.structuredContent;
+    assert.equal(success.generation, 1);
+    assert.equal((await call('claim_execution_run', claim)).data.result.structuredContent.generation, 1);
+    const leaseToken = 'athl1.' + claim.leaseId + '.1.' + claimSecret;
+    const foreignSecret = randomBytes(32).toString('base64url'), foreignId = crypto.randomUUID();
+    const foreignIssued = await f.api('/api/execution/workers', { ...input, credentialId: foreignId, requestId: foreignId, verifier: createHash('sha256').update(foreignSecret).digest('hex') });
+    assert.equal(foreignIssued.status, 201);
+    const foreign = await rpc('tools/call', { name: 'report_execution_run', arguments: { runId: run.id, leaseToken, requestId: 'foreign-lease', message: 'no authority' } }, 'athw1.' + foreignId + '.' + foreignSecret);
+    assert.equal(foreign.data.error.data.code, 'WORKER_AUTHORITY_EXPIRED');
+    const report = await call('report_execution_run', { runId: run.id, leaseToken, requestId: 'report', message: 'observing' });
+    assert.equal(report.data.result?.structuredContent.accepted, true, JSON.stringify(report));
+    assert.ok((await call('complete_execution_run', { runId: run.id, leaseToken, requestId: 'forged', evidence: { status: 'succeeded' } })).data.error);
+    const listing = await call('list_execution_runs', {});
+    assert.equal(listing.data.result.structuredContent.runs.length, 1);
+    assert.ok(!JSON.stringify(listing).includes(claim.verifier));
+    const oversized = await rpc('tools/call', { name: 'report_execution_run', arguments: { message: 'x'.repeat(20000) } });
+    assert.ok(oversized.data.error);
+    await f.configure({ ACCESS_ALLOWED_EMAILS: '["bob@example.test"]' });
+    assert.equal((await rpc('ping')).status, 401);
+    await f.configure({ ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]' });
+    assert.equal((await rpc('ping')).status, 200);
+    await f.configure({ AUTH_MODE: 'unsupported' });
+    assert.equal((await rpc('ping')).status, 503);
+    await f.configure({ AUTH_MODE: 'access' });
+    await f.configure({ ACCESS_APPLICATION_ORIGIN: 'https://different.example.test' });
+    assert.equal((await rpc('ping')).status, 503);
+    await f.configure({ ACCESS_APPLICATION_ORIGIN: f.origin });
+    await f.databaseUnavailable();
+    assert.equal((await rpc('ping')).status, 503);
+    await f.configure({});
+    const shortOwner = await f.token('alice', '3s'), shortSecret = randomBytes(32).toString('base64url'), shortId = crypto.randomUUID();
+    const short = await f.api('/api/execution/workers', { action: 'provision', credentialId: shortId, requestId: shortId, runId: run.id, verifier: createHash('sha256').update(shortSecret).digest('hex'), label: 'short' }, shortOwner);
+    assert.equal(short.status, 201);
+    assert.ok(short.data.expiresAt <= Date.now() + 3000);
+    await new Promise(r => setTimeout(r, Math.max(0, short.data.expiresAt - Date.now() + 75)));
+    assert.equal((await rpc('ping', {}, 'athw1.' + shortId + '.' + shortSecret)).status, 401);
+    const logout = await f.worker.dispatchFetch(f.origin + '/signout-with-chatgpt', { method: 'POST', headers: { authorization: 'Bearer ' + f.alice, origin: f.origin }, redirect: 'manual' });
+    assert.equal(logout.status, 303);
+    assert.equal((await rpc('ping')).status, 401);
+    console.log('Actual Worker/D1: owner bootstrap, opaque principal separation, atomic competing claims, replay, hidden-tool/route restrictions, ingress isolation, membership and logout invalidation passed');
+}
+finally {
+    await f.close();
+}

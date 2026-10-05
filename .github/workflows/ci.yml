@@ -58,6 +58,16 @@ jobs:
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin \
             PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" "$runner_node" \
             --experimental-strip-types tests/execution/backend-worker.mjs
+      - run: npm run test:execution:protocol
+      - name: Verify worker consumer with real Docker and signed evidence
+        run: |
+          runner_node="$(command -v node)"
+          sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
+            --experimental-strip-types tests/execution/worker-evidence.mjs
+          sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
+            --experimental-strip-types tests/execution/consumer-worker.mjs
+          sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
+            --experimental-strip-types tests/execution/consumer-drift.mjs
       - run: npm run test:browser-policy
       - run: npm run test:auth
       - name: Verify identity in the already-built Worker

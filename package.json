@@ -27,7 +27,9 @@
     "test:backend:integration": "node --experimental-strip-types tests/execution/backend-worker.mjs",
     "test:planning:recovery": "node --experimental-strip-types tests/planning/recovery.mjs",
     "test:planning:lifecycle": "node --experimental-strip-types tests/planning/lifecycle.mjs",
-    "test:planning:browser": "node --experimental-strip-types tests/planning/browser.mjs"
+    "test:planning:browser": "node --experimental-strip-types tests/planning/browser.mjs",
+    "test:execution:protocol": "node --experimental-strip-types tests/execution/worker-protocol.mjs && node --experimental-strip-types tests/execution/worker-races.mjs && node --experimental-strip-types tests/execution/consumer-descriptor.mjs && node --experimental-strip-types tests/execution/worker-envelope.mjs",
+    "test:consumer:integration": "node --experimental-strip-types tests/execution/worker-evidence.mjs && node --experimental-strip-types tests/execution/consumer-worker.mjs && node --experimental-strip-types tests/execution/consumer-drift.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

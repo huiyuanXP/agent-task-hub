@@ -37,7 +37,7 @@ export interface LegacyExecutionEvidence { claims: EvidenceClaims; signature: st
 export type ExecutionEvidence = LegacyExecutionEvidence | BackendAttestation;
 export interface EvidenceTrust { keyId: string; key: CryptoKey }
 /** Constructed only by trusted server code, never from the request body. */
-export interface RunContext { owner: string; actor: string; evidenceTrust?: EvidenceTrust }
+export interface RunContext { owner: string; actor: string; evidenceTrust?: EvidenceTrust; /** Server-only delegated Run restriction; never request input. */ executionRunId?: string }
 export interface CreateRunInput {
   ticketId: string;
   expectedRevision: number;

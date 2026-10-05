@@ -312,3 +312,92 @@ and adds this actual backend gate with trusted host proc access. CI creates and
 checks the shared test-results parent as the ordinary runner user before privileged
 Docker gates, so later ordinary-user integration can create its own artifact
 directory without changing checkout or private-key ownership.
+
+## Consumer CLI
+
+The execution consumer is separate from the privileged supervisor. It needs
+Node >=22.13, Linux `/usr/bin/flock` and `/proc`, and network access to the
+configured MCP endpoint. It receives no supervisor signing keys. The Docker
+guest receives neither worker credentials nor owner JWTs.
+
+Use a private owner-token file (regular, owned by the current UID, mode 0600)
+for a separate provision-and-exit invocation. Never put its contents in argv:
+
+```sh
+node --experimental-strip-types runner/consumer.mjs bootstrap \
+  --state /absolute/private/consumer-run \
+  --endpoint https://hub.example.test/mcp \
+  --run SELECTED_EXISTING_RUN_ID \
+  --owner-file /absolute/private/access.jwt
+
+node --experimental-strip-types runner/consumer.mjs run \
+  --state /absolute/private/consumer-run
+
+node --experimental-strip-types runner/consumer.mjs revoke \
+  --state /absolute/private/consumer-run \
+  --owner-file /absolute/private/access.jwt
+```
+
+Bootstrap also accepts `--owner-fd NUMBER` for an already-open protected regular
+file descriptor (>=3). It does not accept a literal token argument. Runtime
+rejects owner-file/fd options, owner-token environment configuration and unknown
+configuration keys; it never invokes bootstrap. Keep the owner-token file out
+of the runtime's environment and mounted directories. Bootstrap writes only
+its independently generated delegation secret/public binding to consumer state.
+
+The state directory must be absolute, owned and mode 0700 with no symlinks.
+`consumer.json` is a private regular file, atomically replaced and fsynced with
+its parent directory. A kernel flock, held for the whole CLI process, excludes
+second processes; a serialized in-process journal prevents renewal and progress
+from overwriting pending IDs. Existing unsafe files are rejected, not repaired.
+Pending bootstrap/claim secrets and request IDs are saved before network writes.
+On response loss, rerun the identical command against the same state directory.
+If that state is lost, revoke the public credential through the owner API and
+bootstrap a new identity; the server cannot recover a secret from its verifier.
+
+For an already-provisioned Cloudflare Access machine ingress path, pass
+`--ingress-file /absolute/private/ingress.json` separately to each command that
+needs it. The private JSON has exactly `clientId` and `clientSecret`, sent as
+`CF-Access-Client-Id` and `CF-Access-Client-Secret`. It is allowed only with HTTPS,
+only to the configured origin, with redirects rejected. These ingress secrets
+remain outside state, request payloads, Docker and application authority. Local
+synthetic acceptance permits HTTP only for loopback endpoints. A production
+human-only Access gateway still requires the separate deployment gate to
+provision machine ingress; this CLI does not modify Access policies.
+
+Runtime performs initialize, initialized notification and ping, reads its Run,
+claims a six-second lease, starts through MCP and reports bounded progress. It
+renews execution leases every two seconds concurrently with result polling.
+All start/renew/report/complete/cancel request IDs are saved before writes.
+It reconciles signed backend results rather than asserting success. A restarted
+runtime with a persisted physical permit uses a fresh reconciliation generation
+after lease expiry, retaining the same backend identity and original deadline.
+Reconciliation leases are not renewable. A credential's expiry or revocation
+stops privileged calls and requires a new explicit owner bootstrap.
+
+SIGINT/SIGTERM requests owned cancellation with a matching current lease and
+polls for trusted physical closure. With an expired lease but valid delegation,
+it can claim reconciliation authority for the same permit. It prints
+`stop confirmed` only after the persisted permit has a verified closure. When
+credentials or transport prevent confirmation, it reports `unconfirmed`; the
+supervisor's independent hard deadline still applies. A logically cancelled Run
+alone is not proof of physical stop. Runtime waiting is bounded to 60 seconds.
+Exit 0 means a terminal outcome with confirmed stop was observed, including a
+truthful `failed` or `cancelled` outcome; it does not imply execution succeeded.
+
+| Function/module | Responsibility |
+| --- | --- |
+| `openConsumerState` | Private state validation, exclusive lifetime lock, serialized fsynced atomic writes |
+| `endpoint`, `ingressHeaders` | Fixed-origin/HTTPS transport configuration and protected ingress secrets |
+| `connection` | Bounded redirect-free HTTP, MCP negotiation, stable-ID retries and redacted errors |
+| `main` / bootstrap | Parse strict commands, persist fresh secret/IDs, use protected owner credential, exit |
+| `runtime` | Connect, claim/start, concurrent renewal, progress, trusted completion, reclaim and controlled shutdown |
+| revoke | Separately owner-authenticated revocation with a persisted stable request ID |
+
+Additional acceptance commands (build first; Docker suites need trusted local
+Docker/proc access):
+
+```sh
+npm run test:execution:protocol
+npm run test:consumer:integration
+```

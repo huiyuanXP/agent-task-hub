@@ -420,3 +420,122 @@ execution MCP tool. Malformed JSON or an invalid explicit registry produces
 `CONFIGURATION_UNAVAILABLE` with status503 for that execution call; authenticated
 planning create/read/claim/save tools remain independent. Verify the actual built
 Worker boundary with `npm run test:execution:configuration`.
+
+## Run-scoped MCP workers
+
+An owner selects an existing frozen Run with `get_execution_run` or
+`list_execution_runs`, or the execution UI/API, then provisions its delegation
+through `/api/execution/workers`. General Ticket/Plan queries remain independent.
+This API accepts owner authentication only: POST `action: "provision"` takes
+`credentialId`, `requestId`, `runId`, `verifier` (SHA-256 hex), and `label`; GET
+lists public issuance metadata; POST `action: "revoke"` takes `credentialId` and
+`requestId`. Issuance records retain the verified owner actor, membership, mode,
+issuer, audience, application origin and provisioning Access token hash. They
+cannot approve a grant, change an operation, or create a Run.
+
+The separate CLI bootstrap generates a random 32-byte secret and public IDs,
+fsyncs private pending state before the request, and sends only the secret's
+SHA-256 verifier. Exact retries return the same public binding. Changed input
+conflicts. D1 contains no recoverable secret. Credentials expire after at most
+15 minutes and no later than the provisioning owner's verified Access expiry.
+Logout/token revocation, current account removal, incompatible authentication
+configuration, expiry and explicit delegation revocation invalidate them. A
+replacement requires another explicit owner bootstrap. Lost local secrets
+require owner revocation and a fresh state directory.
+
+Finite admission limits are 4 active credentials per Run, 32 active credentials
+per owner, and 256 retained issuance records per owner. Issuance records are
+retained permanently within this fixed limit, including expired/revoked records,
+so reusing an old request cannot revive its secret. Reaching capacity fails
+closed; this release provides no tombstone-deleting maintenance operation.
+Leases retain at most 256 generations per credential and 4096 per owner, and
+at most 256 action request records per lease. These are application bounds;
+D1 storage and provider quotas can impose tighter deployment bounds.
+
+Only the exact `/mcp` endpoint recognizes versioned `Bearer athw1.ID.SECRET`.
+It installs a discriminated `execution_worker` principal with `user: null` and
+no owner `grantAuthority`. Invalid credentials never fall back to owner cookies,
+Access assertions or Sites identity headers. Cookies, cross-origin Origin or
+fetch metadata, and worker authentication on other HTTP routes are rejected.
+The supervisor checkpoint endpoint retains its separate signed service authority.
+
+Worker discovery and direct dispatch use the same fixed allowlist:
+
+| Tool | Authority and behavior |
+| --- | --- |
+| `get_execution_run` | Read the exact delegated Run and public permit deadline/stop metadata |
+| `list_execution_runs` | Return only the delegated Run; no owner-wide filters |
+| `claim_execution_run` | Persist one exclusive six-second generation using client public lease/request IDs and verifier |
+| `start_execution_run` | Current execute lease and effective approved grant; reuse immutable permit/backend identity |
+| `renew_execution_run` | Current execute lease and grant; extend lease at most six seconds, never the permit deadline |
+| `report_execution_run` | Current execute lease, active Run, at most 2048 characters; does not assert lifecycle |
+| `complete_execution_run` | Current lease; fetch and verify historical backend receipts for this exact permit |
+| `cancel_execution_run` | Current matching lease; request owned cancellation and reconcile actual stop |
+
+Claim arguments are `runId`, `leaseId`, `requestId`, `verifier`, and `mode`
+(`execute` or `reconcile`). Leased writes take `runId`, `requestId`, and
+`leaseToken: "athl1.LEASE_ID.GENERATION.SECRET"`; report additionally takes
+`message`. No tool accepts owner, actor, command, callback URL, grant authority,
+resource expansion, or caller-provided completion evidence. A lease never
+serves as root HTTP authentication.
+
+Execution claims/start/renew require the current grant, selected registry
+binding and Ticket revision/body. A reconciliation claim requires a persisted
+permit for the same frozen attempt, even when its grant expired or current
+Ticket/registry changed. Reconciliation permits completion and owned stop only;
+it cannot start, report progress, or renew. After six seconds, a still-valid
+delegation can explicitly claim a fresh generation. Old claim retries and old
+mutation tokens cannot revive expired/superseded generations. Cached successes
+still undergo current authority checks.
+
+`guardedDatabase` wraps existing execution service mutations in one atomic D1
+batch with conditional CHECK statements before and after the original SQL.
+The CHECK predicates resolve the current credential, token revocation, exact
+lease ID/principal/generation/mode/expiry, and applicable grant/Ticket binding
+inside the same transaction. A rejected check rolls back the entire batch.
+Temporary guard rows are deleted in that transaction. Start-permit creation,
+receipt retention, lifecycle projection, cancellation and action journaling
+therefore share these guards rather than relying on asynchronous preflight.
+An already valid durable permit remains independent of lease expiry; recovery
+never extends its original deadline or invents another physical identity.
+
+MCP retains initialize version negotiation, initialized notifications, ping and
+JSON-RPC envelopes. Worker request bodies are bounded at 16 KiB; existing owner
+planning requests retain a 256 KiB ceiling. Complete response envelopes are
+bounded at 1 MiB, stored action responses at 512 KiB, with bounded public errors.
+A single maximum 80,000-codepoint frozen Ticket fits including the duplicated
+MCP text/structured result. Owner lists accept a limit up to 100 and Ticket/state
+filters; oversized aggregate results return `BODY_TOO_LARGE`. Use a smaller
+limit (including 1) or a Ticket filter instead of expecting unbounded results.
+Backend receipts are independently size/signature/binding checked. Worker tool
+names are checked before any owner/planning fallback, so adding an owner tool
+does not enlarge worker authority.
+
+`EXECUTION_WORKER_MACHINE_INGRESS=1` explicitly permits an ingress-injected Access
+assertion alongside a verified application worker Bearer. It never changes the
+worker principal into an owner. Other explicit values fail configuration.
+Hosted use requires a separately provisioned Access machine/service ingress
+path under the existing deployment gate; an opaque Bearer cannot pass an
+unmodified human-only Access gateway. No production policy is changed here.
+
+### Worker protocol Function map
+
+| Function/module | Responsibility |
+| --- | --- |
+| `workerConfiguration`, `workerTransport` | Current authentication configuration, route and machine transport policy |
+| `authenticateWorker`, `assertWorkerCurrent` | Verify opaque secret against server records, membership/configuration and current revocation |
+| `provisionWorker`, `listWorkers`, `revokeWorker` | Owner-only finite issuance, public audit and revocation |
+| `credentialGuard`, `leaseGuard`, `guardedDatabase` | SQL transaction-boundary authority checks and rollback |
+| `claimExecution` | Exclusive monotonically increasing generations and exact claim replay |
+| `renewExecution`, `reportExecution` | Idempotent lease renewal and bounded non-authoritative progress |
+| `startExecution`, `completeExecution`, `cancelExecution` | Guard existing dispatch/result/cancellation services and journal request outcomes |
+| `getExecutionRun`, `dispatchWorkerTool` | Single-Run reads and explicit worker capability dispatch |
+| `dispatchExecutionTool` | Existing owner catalog/grants plus owner-scoped Run selection |
+| `reconcilePermit` | Bind every trusted backend receipt to the requested permit before retention/projection |
+| `/api/execution/workers` | Verified owner bootstrap/list/revoke HTTP adapter |
+
+Actual local acceptance uses a built Worker, fresh D1, ephemeral Access JWKS,
+the shipped CLI, signed Node supervisor, and real Docker. It covers protocol
+separation, competing claims, mutation-boundary races, wrong-permit signed
+results, response loss, concurrent renewal, restart/reclaim, natural expiry,
+revocation and signal shutdown. These local checks establish no hosted rollout.

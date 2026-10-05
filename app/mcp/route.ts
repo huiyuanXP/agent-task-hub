@@ -1,3 +1,6 @@
+import { getAuthenticationContext } from '../../lib/auth-context';
+import { readBody } from '../../lib/execution/http.mts';
+import { dispatchWorkerTool, workerTools } from '../../lib/execution/worker-mcp.mts';
 import { env } from "cloudflare:workers";
 import { configuredRegistry } from '../../lib/execution/backend-config.mts';
 import { backfillPlanning } from "../../lib/planning-recovery";
@@ -152,7 +155,10 @@ export async function POST(req: Request) {
   try {
     if (req.headers.has("origin") && req.headers.get("origin") !== new URL(req.url).origin)
       return Response.json({ error: "Invalid request origin" }, { status: 403 });
-    const rpc = (await req.json()) as RpcRequest;
+    const principal = getAuthenticationContext();
+    const rpc = (await readBody(req, principal?.kind === "execution_worker" ? 16384 : 262144)) as RpcRequest;
+    if (!rpc || rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string" || rpc.method.length > 80 || (rpc.id !== undefined && typeof rpc.id !== "string" && typeof rpc.id !== "number") || (typeof rpc.id === "string" && rpc.id.length > 128)) throw new ExecutionError("INVALID_INPUT", "Invalid JSON-RPC envelope", 400);
+    const worker = principal?.kind === "execution_worker" ? principal.worker : null;
     id = rpc.id ?? null;
     const p = rpc.params || {},
       method = rpc.method;
@@ -164,17 +170,20 @@ export async function POST(req: Request) {
         tool: method === "tools/call" ? p.name : undefined,
       }),
     );
-    const respond = (result: Record<string, unknown>) =>
-      Response.json(
-        { jsonrpc: "2.0", id, result: { resultType: "complete", ...result } },
+    const respond = (result: Record<string, unknown>) => {
+      const envelope = { jsonrpc: "2.0", id, result: { resultType: "complete", ...result } };
+      if (new TextEncoder().encode(JSON.stringify(envelope)).length > 1048576) throw new ExecutionError("BODY_TOO_LARGE", "MCP result exceeds bound", 413);
+      return Response.json(
+        envelope,
         { headers: { "Cache-Control": "no-store" } },
       );
+    };
     if (method === "server/discover")
       return respond({
         resultType: "complete",
         supportedVersions: ["2026-07-28"],
         serverInfo: { name: "idea-ticket-hub", version: "1.0.0" },
-        capabilities: { tools: {}, events: {} },
+        capabilities: worker ? { tools: {} } : { tools: {}, events: {} },
       });
     if (method === "initialize")
       return respond({
@@ -183,12 +192,17 @@ export async function POST(req: Request) {
             ? "2026-07-28"
             : "2025-03-26",
         serverInfo: { name: "idea-ticket-hub", version: "1.0.0" },
-        capabilities: { tools: {}, events: {} },
+        capabilities: worker ? { tools: {} } : { tools: {}, events: {} },
       });
     if (method === "notifications/initialized")
       return new Response(null, { status: 202 });
     if (method === "ping") return respond({});
-    if (method === "tools/list") return respond({ tools: [...tools, ...executionTools] });
+    if (method === "tools/list") return respond({ tools: worker ? workerTools : [...tools, ...executionTools] });
+    if (worker) {
+      if (method !== "tools/call") throw new ExecutionError("AUTHORIZATION_DENIED", "Worker capability denied", 403);
+      const result = await dispatchWorkerTool(database(), worker, p.name as string, p.arguments, env);
+      return respond({ content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: false });
+    }
     if (method === "events/list") return respond({ events: [eventDef] });
     const user = await getChatGPTUser();
     console.info(
@@ -590,14 +604,14 @@ export async function POST(req: Request) {
       isError: false,
     });
   } catch (e) {
-    if (!(e instanceof ExecutionError)) console.error(e instanceof Error ? e.message : "MCP error");
+    if (!(e instanceof ExecutionError)) console.error("MCP request failed");
     return Response.json(
       {
         jsonrpc: "2.0",
         id,
         error: {
           code: -32602,
-          message: e instanceof Error ? e.message : "Request failed",
+          message: e instanceof ExecutionError ? e.message : "Request failed",
           ...(e instanceof ExecutionError ? { data: { code: e.code, status: e.status } } : {}),
         },
       },
