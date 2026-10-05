@@ -150,3 +150,29 @@ modified home navigation. Existing integration covers capture, planning,
 history, filters and frozen Run views; standalone authorization covers the
 persisted decision panel. Fixtures close their own browser, proxy, ingress and
 Worker and remove temporary D1 on both success and failure.
+
+## Planning recovery acceptance
+
+After the build, `npm run test:planning:recovery` exercises durable callback attempts,
+restart, real scheduled dispatch, claim expiry/recovery and bounded housekeeping
+against fresh D1. `npm run test:planning:lifecycle` checks authenticated subscription
+backfill/refresh/unsubscribe, malformed input, same-origin/owner boundaries, manual
+retry CAS/cooldown and safe read-only API/MCP/Idea metadata. Controlled callback
+fixtures verify the real challenge and HMAC; unexpected destinations fail. No live
+subscription or production resources are used.
+
+`npm run test:planning:browser` drives real Chromium through the existing restrictive
+proxy and a loopback-only test ingress to the authenticated built Worker. Fixture-only
+D1 timestamps provide active/expired/permanent/backoff states; UI responses are real.
+It checks countdown and local expiry, a successful manual recovery POST/refresh,
+permanent reason visibility, next retry, disabled backoff and a usable missing-job
+fallback. It retains page/network error and blocked-origin evidence. Each invocation
+closes its owned ingress/proxy/browser/Worker and removes temporary D1 state. All
+three suites are part of default and hosted entrypoints. Do not rebuild the shared
+compiled Worker while standalone suites are running.
+
+Full local `npm test` still requires the upstream pinned Docker image, daemon and
+host proc permissions. A machine without Docker cannot claim full-suite success;
+run application/auth/planning/browser/integration checks separately and retain the
+full command's failures. Hosted Ubuntu CI supplies the explicit Docker boundary
+without skipping or weakening those execution checks.

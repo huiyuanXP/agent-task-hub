@@ -99,3 +99,44 @@ The pre-fix isolated API test observed no v2 job immediately after saving. After
 #9 final review found a runtime project type gap. A shared Idea guard now rejects malformed/oversized project values before either create or update writes. Its actual Worker regression failed with 201 before the fix and passes with 400 plus unchanged records/history/jobs. Independent scoped re-review reports no remaining findings. Build, full npm test, lint and TypeScript passed; the validation fix was followed by a fresh build and Worker regression.
 
 The final #9 branch also retains upstream PR #33 isolated workspace functionality and adds the revision Worker check to explicit hosted CI. Local whole-suite verification after that merge encountered only the absent Docker daemon/socket required by upstream execution workspace tests (34 failures, 81 execution checks passed); no tests were skipped or weakened. Application auth/planning/browser/integration checks are run separately here, while hosted Ubuntu CI provides the required full Docker acceptance before merging this ticket.
+
+## #10 — Durable planning recovery
+
+Planning callback delivery now persists owner/job/subscription/generation target
+state in D1 and recovers through the built Worker's minute cron. Signed callbacks
+use token-guarded delivery leases, bounded attempts/backoff and stable event IDs.
+Expired planner claims and unclaimed accepted events recover with exact revision
+CAS and bounded automatic generations. Verified subscribe/refresh immediately
+backfills; unsubscribe records safe inactive-target reasons. The authenticated
+same-origin manual endpoint validates its runtime input, guards initial insertion
+against Idea edits, preserves active/done/pending state and applies a one-generation
+CAS retry with a sixty-second cooldown.
+
+Explicit API/MCP job DTOs and Idea `planning` metadata expose authoritative lease,
+retry, generation, attempt and sanitized failure state without internal job tokens,
+event bodies or subscription secrets. The inbox shows lease countdown/expiry,
+backoff, cooldown and failure reason, with an eligible recovery action. Existing
+account/version/expiry guards, Ticket approval and Run/runner behavior remain intact.
+
+Actual fresh-D1 Worker and loopback Chromium regressions were observed RED before
+route/UI implementation. The recovery, lifecycle and browser suites are included
+in default npm testing and hosted CI; [PLANNING.md](PLANNING.md) describes operator
+bounds, migration and at-least-once contracts. Detailed command evidence and final
+validation are retained in ignored `.superpowers/sdd/2026-10-05-planning-recovery/`.
+Both dependency locks are preserved. Full local Docker acceptance remains dependent
+on the upstream backend prerequisites; hosted CI retains all mandatory checks.
+No deployment, production data migration, live callback registration, Ticket
+execution, issue-specific push or PR is part of this implementation task.
+
+## #10 final review and controller verification
+
+Task-level and whole-issue independent reviews approve the source with no Critical or Important findings. Dense lifecycle formatting, a forced manual-initial-insert/Idea-edit race test, and expected negative/framework diagnostic noise are recorded as non-blocking follow-ups. The controller fast-forwarded the primary checkout to the reviewed source, then completed a fresh build, all six actual authenticated lifecycle groups, lint and TypeScript with exit 0. Both locks are preserved. Full hosted acceptance including the mandatory Docker suite remains required before merging this issue.
+
+The following decisions were made under the user’s authorization to proceed autonomously; each records its practical cost if reconsidered.
+
+- Use D1 outbox/cron instead of adding Cloudflare Queues — existing durable storage avoids unprovisioned infrastructure while meeting ticket recovery needs — if wrong, replace dispatch adapter later; persistent events/attempts remain useful.
+- Continue local application checks with existing absent Docker prerequisite, preserving full hosted Docker CI — no change touches runner implementation, and user authorized autonomous ticket delivery — if hosted CI fails, resolve before merging; do not claim full local suite success.
+- Task1 claim/save guards take a single trusted clock instant for each atomic save batch, with same-owner Idea joins — recovery must never permit partial stale Plan entries around lease equality — if wrong, strict guard can reject a planner requiring a fresh claim.
+- An expired planning claim without an active matching subscription clears its old token and persists a fresh generation/reason without spending automatic recoveries — the no-subscription rule must preserve recovery budget while revoking expired authority — if wrong, unattended poll-only consumers can exceed the usual recovery-generation budget; same-owner CAS/current revision guards still bound authority. Queued no-subscription ticks must not repeatedly regenerate.
+- An accepted event's wake deadline survives subscription expiry; only when due may an unclaimed disconnected job create one fresh generation without spending automatic recoveries — same subscription refresh before5minutes must retain accepted event/generation, after deadline must be able to wake again — if wrong, disconnect/reconnect loops can create budget-free generations at the acknowledgement interval; repeated no-subscription cron must not churn and exhausted jobs remain terminal. Implementer identified actual stuck reconnect path and adds RED/covering checks before commit.
+- Limit invalidation to50 targetrows TOTAL per deliverDue, stable ordering and optionalowner/jobscope — specrequiresboundedhousekeeping butdidn'tgivea targetcap;50 matchesdiscoverybatchscale — if wrong, dormantcleanup takesadditionalticks; currentQueued/activeTarget sendguards must remain independent of cleanup.
