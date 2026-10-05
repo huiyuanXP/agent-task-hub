@@ -2,7 +2,7 @@ import { mkdir, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { normalizePolicy } from './policy.mjs';
+import { IMAGE, normalizePolicy } from './policy.mjs';
 import * as disk from './state.mjs';
 import * as docker from './docker.mjs';
 import { snapshotInputs } from './inputs.mjs';
@@ -10,20 +10,21 @@ import { packInputs } from './archive.mjs';
 import { artifactDeclarations, scanArtifacts } from './artifacts.mjs';
 import { pinFrozenOutput, verifyOutputAccess } from './container-files.mjs';
 
-export async function createWorkspace(root, run, requestedPolicy = {}) {
+export async function createWorkspace(root, run, requestedPolicy = {}, registeredImage = IMAGE) {
+  if (typeof registeredImage !== 'string' || !/^node@sha256:[a-f0-9]{64}$/.test(registeredImage)) throw Error('Pinned registered image required');
   const policy = normalizePolicy(requestedPolicy), owner = disk.identity(run), id = disk.workspaceId(owner);
   const requestedDeadline = run.deadlineMs;
   return disk.withRoot(root, async (root, key) => {
     const names = await disk.records(root);
     if (names.includes(id)) {
       const existing = await disk.load(root, key, id);
-      if (JSON.stringify(existing.policy) !== JSON.stringify(policy) || existing.requestedDeadline !== (requestedDeadline ?? null)) throw Error('Workspace identity policy conflict');
+      if (JSON.stringify(existing.policy) !== JSON.stringify(policy) || existing.requestedDeadline !== (requestedDeadline ?? null) || (existing.image ?? IMAGE) !== registeredImage) throw Error('Workspace identity policy conflict');
       return disk.reference(root, existing);
     }
     if (names.length >= disk.MAX_WORKSPACES) throw Error('Workspace retention capacity exhausted');
     const states = await Promise.all(names.map(name => disk.load(root, key, name)));
     if (states.filter(state => state.state !== 'removed').length >= disk.MAX_ACTIVE) throw Error('Active workspace capacity exhausted');
-    const state = { version: 1, ...owner, id, authority: disk.authority(key, id), policy, state: 'created', volumeName: id + '-input', containerName: id, importerName: id + '-import', containerId: null, importerId: null, watchdog: null, guardian: null, execution: null, creates: { volume: 'none', importer: 'none', container: 'none' },
+    const state = { version: 1, image: registeredImage, ...owner, id, authority: disk.authority(key, id), policy, state: 'created', volumeName: id + '-input', containerName: id, importerName: id + '-import', containerId: null, importerId: null, watchdog: null, guardian: null, execution: null, creates: { volume: 'none', importer: 'none', container: 'none' },
       createdAt: Date.now(), requestedDeadline: requestedDeadline ?? null, deadlineMs: Math.min(requestedDeadline ?? Infinity, Date.now() + policy.ceilings.timeoutMs) };
     await mkdir(join(root, id), { mode: 0o700 });
     await disk.syncDirectory(root);
@@ -138,7 +139,7 @@ export function createExecution(workspace, argv) {
     return { id: created.Id };
   });
 }
-export async function startExecution(workspace, execId) {
+export async function startExecution(workspace, execId, onStarted) {
   const limits = await disk.withWorkspace(workspace, async (state, save) => {
     if (state.state !== 'running' || state.execution?.id !== execId || state.execution.phase !== 'created') throw Error('Execution identity or start state mismatch');
     await ensureLive(state);
@@ -148,24 +149,32 @@ export async function startExecution(workspace, execId) {
     return { timeoutMs: remaining(state), maxLogBytes: state.policy.maxLogBytes };
   });
   let result;
-  try { result = await docker.startExec(execId, limits); } catch (error) {
-    await disk.withWorkspace(workspace, async (state, save, root) => {
-      if (error.output) {
-        await disk.atomicWrite(join(root, state.id), 'stdout.log', error.output.stdout);
-        await disk.atomicWrite(join(root, state.id), 'stderr.log', error.output.stderr);
-      }
-      state.execution = { ...state.execution, phase: 'unavailable', reason: 'Execution interrupted before trusted exit retention' }; await save();
-    });
-    throw error;
-  }
-  await disk.withWorkspace(workspace, async (state, save, root) => {
+  try { result = await docker.startExec(execId, { ...limits, onStarted: async at => {
+    await disk.withWorkspace(workspace, async (state, save) => { state.execution.startedAt = at; await save(); });
+    if (onStarted) await onStarted(at);
+  } }); } catch (error) { return retainInterruptedExecution(workspace, error); }
+  try { await disk.withWorkspace(workspace, async (state, save, root) => {
     remaining(state);
     if (state.state !== 'running') throw Error('Container removed before authoritative exit retention');
     await disk.atomicWrite(join(root, state.id), 'stdout.log', result.stdout);
     await disk.atomicWrite(join(root, state.id), 'stderr.log', result.stderr);
     state.execution = { ...state.execution, phase: 'exited', exitCode: result.exitCode, stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated }; await save();
-  });
+  }); } catch (error) {
+    // Cleanup/deadline can win after the daemon returns actual bytes. Preserve
+    // those bounded streams without accepting an authoritative exit or success.
+    error.output = result; return retainInterruptedExecution(workspace, error);
+  }
   return result;
+}
+async function retainInterruptedExecution(workspace, error) {
+  await disk.withWorkspace(workspace, async (state, save, root) => {
+    if (error.output) {
+      await disk.atomicWrite(join(root, state.id), 'stdout.log', error.output.stdout);
+      await disk.atomicWrite(join(root, state.id), 'stderr.log', error.output.stderr);
+    }
+    state.execution = { ...state.execution, phase: 'unavailable', reason: 'Execution interrupted before trusted exit retention' }; await save();
+  });
+  throw error;
 }
 export async function captureArtifacts(workspace, declarations) {
   declarations = structuredClone(declarations);

@@ -1,7 +1,7 @@
 import type { ExecutionDatabase } from './types.mts';
 import type { Authorization, AuthorizationContext, AuthorizationRow, AssertAuthorizationInput, DecisionInput, EffectiveAuthorizationStatus, PrepareExecutionInput, PreparedExecution, RevokeInput } from './authorization-types.mts';
 import { boundedId, exactObject, ExecutionError } from './errors.mts';
-import { descriptorsForBody, getOperationCatalog, snapshotContext } from './catalog.mts';
+import { selectedDescriptors, getOperationCatalog, snapshotContext } from './catalog.mts';
 import { snapshotPrepare, validateBudget, validatePrepare, validateScope } from './authorization-validation.mts';
 import { getRun } from './runs.mts';
 const conflict = () => new ExecutionError('DECISION_CONFLICT', 'Decision ID or authorization state conflicts', 409);
@@ -19,7 +19,7 @@ async function present(db: ExecutionDatabase, context: AuthorizationContext, row
     if (!ticket || ticket.revision !== row.ticket_revision) effectiveStatus = 'stale_revision';
     else if (context.now! >= row.expires_at) effectiveStatus = 'expired';
     else {
-      const current = await descriptorsForBody(ticket.body, context);
+      const current = await selectedDescriptors(ticket.body, context, scope);
       if (JSON.stringify(current.map(({ operationId, definitionHash }) => ({ operationId, definitionHash }))) !== row.scope) effectiveStatus = 'stale_definition';
     }
   }
@@ -46,11 +46,11 @@ export async function prepareExecution(db: ExecutionDatabase, context: Authoriza
   if (existing) return resultFor(existing);
   if (input.expiresAt <= context.now! || input.expiresAt > context.now! + 86400000) throw denied('invalid expiry (maximum 24 hours)');
   const catalog = await getOperationCatalog(db, context, { ticketId: input.ticketId, expectedRevision: input.expectedRevision });
-  if (JSON.stringify(catalog.operations.map(({ operationId, definitionHash }) => ({ operationId, definitionHash }))) !== JSON.stringify(input.scope)) throw denied('scope differs from current catalog');
+  if (JSON.stringify(catalog.operations.filter(d => input.scope.some(s => s.operationId === d.operationId)).map(({ operationId, definitionHash }) => ({ operationId, definitionHash }))) !== JSON.stringify(input.scope)) throw denied('scope differs from current catalog');
   const ticket = await db.prepare("SELECT body FROM records WHERE id=? AND owner=? AND kind='ticket' AND revision=?").bind(input.ticketId, context.owner, input.expectedRevision).first<{ body: string }>();
   if (!ticket) throw new ExecutionError('REVISION_CONFLICT', 'Ticket revision changed', 409);
   // Recompute against the exact body used by INSERT SELECT, covering concurrent edits.
-  const operations = await descriptorsForBody(ticket.body, context);
+  const operations = await selectedDescriptors(ticket.body, context, input.scope);
   if (JSON.stringify(operations.map(({ operationId, definitionHash }) => ({ operationId, definitionHash }))) !== JSON.stringify(input.scope)) throw new ExecutionError('REVISION_CONFLICT', 'Ticket definition changed', 409);
   const id = crypto.randomUUID(), runId = crypto.randomUUID(), now = new Date(context.now!).toISOString();
   const runInputKey = JSON.stringify([input.ticketId, input.expectedRevision, input.requestId, id, input.attempt, context.actor]);

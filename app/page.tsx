@@ -1034,8 +1034,8 @@ export default function Home() {
                     ],
                     [
                       "VM Runner / OpenAgents",
-                      "未连接",
-                      "目前不会启动 Agent 或执行代码。手动状态更新和执行记录不代表 VM 已运行。",
+                      "查看授权面板",
+                      "已批准的登记操作可通过执行授权面板启动；后端连接和实际结果以该面板为准。手动记录不代表进程执行。",
                     ],
                     [
                       "定时任务与额度",
@@ -1068,8 +1068,8 @@ export default function Home() {
             <span>
               每 10 秒自动刷新 ·{" "}
               {planning.subscriptions > 0
-                ? "Agent 事件已订阅 · VM 未连接"
-                : "Agent 待订阅 · VM 未连接"}
+                ? "Agent 事件已订阅 · 执行连接见授权面板"
+                : "Agent 待订阅 · 执行连接见授权面板"}
             </span>
           </footer>
         </main>

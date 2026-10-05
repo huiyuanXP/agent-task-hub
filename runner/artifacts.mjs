@@ -4,7 +4,7 @@ import { open, opendir } from 'node:fs/promises';
 import { relativePath, exact } from './policy.mjs';
 import { fdPath, mountId, requireTmpfs } from './container-files.mjs';
 export function artifactDeclarations(declarations, policy) {
-  if (!Array.isArray(declarations) || !declarations.length || declarations.length > 64) throw Error('Invalid artifact declarations');
+  if (!Array.isArray(declarations) || declarations.length > 64) throw Error('Invalid artifact declarations');
   let total = 0; const seen = new Set();
   return declarations.map(item => {
     exact(item, ['path', 'maxBytes']);

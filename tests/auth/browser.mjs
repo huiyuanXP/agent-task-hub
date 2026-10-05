@@ -186,6 +186,10 @@ try {
   await deniedPoll; await waitForHeld(1); await assertPanelCleared();
   hold = false; releaseHeld(); await page.waitForLoadState('networkidle'); panelFault = undefined;
   console.log('PASS: authorization poll 401 immediately clears workspace while sibling Run list is held');
+  await openPanel(); panelFault = { path: '/api/execution/dispatch', method: 'GET', status: 401 };
+  const deniedBackendHealth = panelDenial(); await panel.getByRole('button', { name: '刷新授权状态' }).click();
+  await deniedBackendHealth; await assertPanelCleared(); panelFault = undefined;
+  console.log('PASS: execution health denial clears all cached private Run, grant, connection and result state');
   await openPanel();
   panelFault = { path: '/api/execution', method: 'GET', status: 403 }; holdResponses(['/api/authorization']);
   const deniedList = panelDenial(); await panel.getByRole('button', { name: '刷新授权状态' }).click();

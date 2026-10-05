@@ -134,7 +134,7 @@ implemented now; unconfigured Run creation/cancellation cannot imply execution.
 | `getRun(db, owner, id): Promise<Run>` | Owner-scoped lookup with indistinguishable absent/foreign errors |
 | `listRuns(db, owner, filters = {}): Promise<Run[]>` | Bounded owner-scoped state/Ticket listing |
 | `transitionRun(db, context, input): Promise<Run>` | Enforce state graph, backend success evidence, atomic version update |
-| `isExecutionEvidence(value): value is ExecutionEvidence` | Validate exact bounded receipt shape |
+| `isExecutionEvidence(value): value is LegacyExecutionEvidence` | Validate the exact bounded legacy v1 receipt shape |
 | `receiptSigningPayload(claims): Uint8Array` | Produce the versioned canonical bytes for backend signing |
 | `sha256(value): Promise<string>` | Hash the exact UTF-8 frozen contract |
 | `verifyRunEvidence(run, evidence, trust?): Promise<boolean>` | Validate key, claims, binding, time and real ECDSA signature |
@@ -188,9 +188,10 @@ The panel requests a separate pending authorization, then offers explicit owner
 approval, rejection and revocation. It shows the same effective status and audit
 entries returned by MCP. Preparing or approving never starts a process.
 
-The initial catalog contains exactly one operation, `ticket.validate.v1`.
+The default catalog contains `ticket.validate.v1`; optional administrator configuration
+can supply up to 32 registered definitions, with one selected operation per Run.
 `lib/execution/catalog.mts` is shared Worker-safe code that produces the actual
-fixed Node argv consumed by the future supervisor. The pinned image is
+fixed Node argv consumed by the supervisor. The pinned image is
 `node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c`.
 The command reads `input/ticket.json`, verifies its exact UTF-8 byte length and
 SHA-256, requires an object JSON Ticket and writes the declared bounded
@@ -241,27 +242,25 @@ Effective statuses are `pending`, `approved`, `rejected`, `revoked`, `expired`,
 changed Ticket revision takes precedence, followed by expiry and definition
 drift; rejected/revoked decisions remain visible as recorded. Expiry is
 exclusive: `now >= expiresAt` denies starts/renewals. New requests choose a
-latest-start time within 24 hours. A future dispatch must persist an execution
+latest-start time within 24 hours. Dispatch persists an execution
 hard deadline no later than grant expiry or start plus approved timeout.
 Lease expiry is a separate credential boundary. Live `assertAuthorization`
 checks owner, exact Run/scope, reduced budget and nonterminal Run, and denies all
-ineffective grants. Its returned snapshot is a preflight check; future dispatch
-and renewal must also use atomic SQL guards at their write/permit boundary.
+ineffective grants. Its returned snapshot is a preflight check; dispatch also applies atomic SQL guards at its permit boundary.
 
 Historical signed results that actually ended before the persisted execution
 deadline can later be reconciled by a fresh authorized owner/lease. They are
 checked against that original permit and deadline, never treated as a new start
 or rejected solely because delivery occurs after latest-start expiry. Expired
-leases cannot write results. Revocation prevents new permits/renewals and will
-request bounded cancellation of already permitted work when the backend is
-implemented. It does not prove instantaneous physical cancellation.
+leases cannot write results. Revocation prevents new permits/renewals and
+atomically records cancellation intent for already permitted work. It does not prove instantaneous physical cancellation.
 
 An unusable pending/approved/rejected/revoked grant can leave its queued Run
 occupying the active Ticket slot. The panel exposes the existing version-CAS
 **取消 Run，允许重新申请** action, preserving the immutable old grant/audit and
 freeing the logical slot for a fresh revision-bound request. A terminal Run
 cannot exercise its recorded grant. Cancelling a queued model starts no process;
-physical execution cancellation is a distinct future backend confirmation.
+physical execution cancellation requires a distinct signed backend stop confirmation.
 The panel persists preparation and decision request IDs in session storage before
 writes, so response loss and reloads retain retry identity. **重新设置申请**
 discards an unsent/failed local request after checking the server state; it cannot
@@ -350,3 +349,64 @@ directory to retain a screenshot; otherwise the test writes no screenshot.
 Browser/module/output paths have no dependency on the session workspace layout.
 Remove the tooling directory when finished; the harness automatically removes
 its own fresh runtime/database on both success and failure.
+
+## Dispatch, physical reservation and actual results (#16)
+
+The configured execution panel displays actual supervisor health, starts only
+approved Runs, polls their durable result and downloads verified retained bytes.
+401/403 clears private Run/grant/connection/result state through the existing
+session generation boundary; stale async responses cannot repopulate a new
+account. A503 remains a distinct temporary/unconfigured condition.
+
+- `GET /api/execution/dispatch` reads authenticated actual backend health.
+- `POST /api/execution/dispatch` with `{action:"start",runId}` atomically reserves
+  the permit and returns202 with stable backend identity; it does not claim success.
+- `GET /api/execution/dispatch?runId=<id>` polls bounded metadata and reconciles
+  trusted result/fence/stop receipts into D1.
+- `POST` with `{action:"cancel",runId}` persists logical cancellation plus outbox
+  intent, then sends the durable remote fence. A transport failure does not undo
+  the successful cancellation intent or release the physical reservation.
+- `POST` with `{action:"content",runId,kind:"stdout"|"stderr"}` or
+  `{action:"content",runId,kind:"artifact",path:"output/declared-name"}` returns
+  owner-scoped verified bytes. Missing or untrusted retained bytes are unavailable;
+  arbitrary filesystem paths are never selectors.
+
+Migration0005 adds `execution_permits` and `backend_attestations`, immutable
+history triggers and cancellation outbox triggers. The permit's insert-select
+linearizes current approved grant, owned current Ticket revision/body, frozen Run,
+selected descriptor and resource budget. Its partial unique owner/Ticket index
+keeps the physical reservation while `closed_at` is null, including after logical
+terminal states. Deadline is fixed at the earlier of approval expiry and issuance
+plus approved total timeout. Revocation/cancellation atomically marks cancellation
+intent in the same SQL mutation/audit transaction.
+
+`Run.evidence` remains success-only and <=16000 characters. Dispatched Runs reject
+v1 downgrade. The separate immutable bounded v2 table retains all actual outcomes,
+fence acknowledgements and stop proofs. Receipt verification uses the persisted
+permit and configured evidence key, independent of current catalog/grant or
+transport age. Success arriving before a running acknowledgement takes legal
+queued/waiting→running→succeeded edges in one guarded D1 transaction. Terminal
+Runs stay absorbing while late history and actual cleanup proofs remain retainable.
+Only a verified bound `stop` attestation closes the physical reservation. Physical
+cancellation intent remains available for already succeeded, failed or cancelled
+Runs without rewriting their terminal state or evidence. The UI retains a committed
+logical cancellation even if subsequent transport reconciliation returns503;
+physical stop stays unconfirmed until a verified stop receipt arrives.
+
+| Function | Responsibility |
+| --- | --- |
+| `normalizeRegistry`, `normalizeDefinition`, `validateResourceBudget` | Shared strict administrator normalization, deep snapshots and enforceable CPU precision |
+| `selectedDescriptors` | Resolve exactly one approved definition without staling on unrelated registry changes |
+| `createDispatchPermit`, `permitForRun` | Atomic start authority, stable retry binding and physical Ticket reservation |
+| `requestPermitCancellation` | Persist physical stop intent for any owned Run, including absorbing terminal history |
+| `checkpointPermit` | Limited persisted permit/current revocation/revision/deadline checkpoint |
+| `canonical`, `signRequest`, `verifyRequest`, `signReply`, `verifyReply`, `signedFetch` | Worker/Node interoperable direction/nonce/body/status-bound transport |
+| `ReplayWindow` | Bounded live nonce protection without unsafe eviction |
+| `backendConfiguration`, `importSigning`, `importTrust` | Server-only keys/audiences/URLs and distinct signing material |
+| `verifyAttestation`, `ingestAttestation` | Historical v2 trust, immutable receipt insertion, legal lifecycle and verified physical closure in one batch |
+| `handleCheckpoint` | Independent signed service boundary before D1 lookup, no owner permission |
+| `handleBackendRequest`, `reconcileBackend` | Owner HTTP start/poll/cancel/verified-content gateway and durable cancellation delivery |
+| `AuthorizationPanel` | Selected operation, separate approve/start, truthful connection/result state, verified downloads and session-safe polling |
+
+See [RUNNER.md](RUNNER.md) for provisioning, administrator registration, runtime
+limits, restart behavior and the real Worker/Docker/browser acceptance command.

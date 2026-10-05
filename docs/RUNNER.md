@@ -1,9 +1,9 @@
 # Isolated runner workspaces
 
-This Node-only adapter supplies the workspace and Docker lifecycle primitives for
-remote execution. It does not expose an HTTP endpoint, authorize operations or
-issue successful Run receipts. The supervisor must supply an approved fixed argv
-from the shared catalog, an owner/Run/attempt identity and a reduced grant policy.
+This Node-only backend combines the workspace and Docker lifecycle primitives
+with a loopback supervisor. The supervisor accepts authenticated durable permits,
+executes only administrator-registered Node argv and signs actual result/stop
+receipts. The Worker owns approval and physical Ticket reservations.
 Worker code must not import `runner/`.
 
 ## Supported local environment
@@ -53,7 +53,7 @@ is `no`, and no host path or Docker socket is mounted.
 | Writable `/job/output` tmpfs | 64 MiB |
 | Separate `/tmp` and `/dev/shm` | 8 MiB each |
 | Retained stdout / stderr | 64 KiB each, with truncation flags |
-| Declared retained artifacts | 1 MiB total, at most 64 files |
+| Declared retained artifacts | 1 MiB total, at most 32 registered files |
 | Complete output scan | 4,096 entries, 32 nested levels, 200-character safe paths |
 | State admission per configured root | 8 nonterminal workspaces; 64 retained identities |
 
@@ -171,6 +171,141 @@ Each metadata/evidence write is capped at 2 MiB; artifact payloads are capped at
 recovery. Keep all state, ownership keys, logs and generated artifacts outside Git.
 
 Trusted local host/Docker administrators remain in the adapter's trust boundary.
-These primitives do not authorize arbitrary argv; the later supervisor must bind
-its registry and grant to the immutable Run contract and maintain physical Ticket
-reservations through cancellation and uncertain cleanup.
+These primitives do not authorize arbitrary argv; the supervisor binds its
+mirrored registry to the immutable persisted permit and maintains replay fences
+through cancellation and uncertain cleanup.
+
+## Controlled supervisor (#16)
+
+Provision three independent P-256 keypairs once, outside the repository. The tool
+refuses an existing destination and writes mode-0600 files inside a mode-0700
+directory; it prints no private values. Preserve the same files across restarts.
+
+```sh
+node --experimental-strip-types scripts/provision-execution.mjs \
+  /absolute/new-private-directory http://127.0.0.1:5173 http://127.0.0.1:4210
+node --experimental-strip-types runner/main.mjs \
+  /absolute/new-private-directory/supervisor.json
+```
+
+`supervisor.json` is a complete runnable configuration (bounded to16 MiB to
+represent all32 registered definitions), including private state
+root, loopback port, fixed control-plane URL/audiences, control-plane public key,
+supervisor transport private key, and separate evidence private key.
+`worker.vars.json` contains matching Worker bindings. The generated `.dev.vars`
+contains the same bindings in Wrangler format; use it for the local Worker
+without replacing existing identity configuration. These files contain private
+signing material: keep them outside Git and guest inputs. Configure owner identity
+as documented in `AUTHENTICATION.md`; execution keys do not grant user access.
+The automated integration below provisions its own ephemeral keys and synthetic
+Access identity without any manual credential setup.
+
+The supervisor only listens on `127.0.0.1`. A hosted Worker needs a separately
+provisioned private service topology; its loopback cannot reach this host.
+The Worker must set `EXECUTION_RUNNER_URL`, `EXECUTION_RUNNER_AUDIENCE`,
+`EXECUTION_CHECKPOINT_AUDIENCE`, `EXECUTION_CONTROL_KEY`, `EXECUTION_RUNNER_KEY`
+and `EXECUTION_EVIDENCE_KEY`. Optional `EXECUTION_REGISTRY` is public JSON,
+mirrored in the supervisor's `registry`. Missing/invalid configuration returns
+503 and does not fabricate a running or successful Run.
+
+Public registry definitions contain `operationId`, `label`, exact
+`node@sha256:<digest>` and `scriptVersion:1`. Without `argv` this selects the
+versioned built-in Ticket validator. Administrator Node programs additionally
+provide fixed `argv` beginning with `node`, `inputs` and `artifacts` arrays.
+Argv is limited to64 items/32 KiB; neither clients nor Ticket prose can alter it.
+Static inputs declare `{path,sha256,bytes}` beneath `input/assets/`; artifacts
+declare `{path,maxBytes}` beneath `output/`. Empty artifact arrays are supported,
+but the complete frozen output tree is still checked for unsafe entries.
+Collections are sorted canonically; argv order is preserved. Duplicate IDs,
+unknown fields, unsafe paths, ancestor conflicts and oversized inputs fail closed.
+The frozen Ticket plus assets share16 MiB. Descriptor hashes bind the runtime
+layout, exact policy, pinned image, argv and manifests. Unrelated catalog additions
+or reordering do not stale a grant; changing/removing its selected operation does.
+
+The separate supervisor-only `sourceRoots` map is keyed by operation ID.
+`input/assets/example.json` maps to `<sourceRoots[id]>/assets/example.json`.
+No source root appears in the catalog, grants, permits or receipts. The supervisor
+pins and reads actual source bytes, verifies manifest hashes, stages a private
+snapshot, and verifies that snapshot again before importing the read-only volume.
+No client host path, environment, callback URL, shell command or Docker option is
+accepted. Missing images fail under the no-pull policy as real startup failure.
+
+Requests and replies use canonical JSON, raw64-byte P-256 signatures encoded as
+lowercase hex, exact direction/purpose/audience/key ID, method/path, body hash,
+nonce and short10-second expiry. Replies additionally bind status and originating
+request hash. Both runtimes use the same serializer/verifier. Transport redirects
+are rejected. Replay windows reject saturation while preserving live nonces.
+Control and supervisor transport keys and evidence keys must have distinct actual
+public coordinates as well as distinct IDs.
+
+Before registered execution, the supervisor obtains a fresh signed checkpoint
+from `/api/execution/checkpoint`. That narrow service endpoint authenticates the
+supervisor before any D1 query; it has no owner grant-decision capability and does
+not accept Sites owner headers as authority. Running work checks every1 second;
+3 seconds without a valid allow reply requests cancellation. An independently
+armed watchdog always enforces the original deadline, including during outages
+or supervisor SIGKILL. No checkpoint, retry or recovery extends it.
+
+Admission journals the immutable permit and deterministic owner/Run/attempt ID
+before executable work. A single-instance OS flock protects each supervisor root;
+atomic file and directory fsync retain every state/fence. Receipt reads wait for
+that durable transaction. A failed journal write or unexpected lock-holder loss
+blocks further reads/admission until restart; independent cleanup stays armed. Cancellation serializes
+with admission and persists a permanent fence before acknowledgement. An ack is
+not physical stop proof. Cleanup remains pending when a create may still arrive;
+polling reconciles the independent guardian's eventual confirmed removal.
+Recovery queries only the persisted exec ID and never restarts uncertain work.
+An exit code alone does not establish that a never-acknowledged exec started.
+Unknown results remain `evidence_unavailable`, with unknown fields null.
+
+`result`, `cancel_fence` and `stop` are distinct immutable v2 attestations. They
+bind permit hash, owner/Run/Ticket revision/attempt/grant/contract, exact selected
+operation, backend identity and unchanged deadline. Success needs actual start,
+exit0 and validated capture before that deadline. Startup failure, command
+failure, timeout, cancellation and unavailable evidence remain distinct.
+Cleanup/non-success observations may occur later without extending execution
+rights. Retained streams have exact retained-byte hashes/lengths/truncation flags.
+When interruption preserves actual bounded streams, their partial retained bytes
+and truncation flags are also attested and downloadable; unknown exit/times stay
+null. Artifact and stream bytes survive runtime removal and restart. Content endpoints
+accept only exact receipt-declared identities, verify bytes before serving them,
+and report unavailable if content is missing or changed.
+
+Supervisor admission retains at most64 identities and8 nonclosed jobs; no replay
+fence/tombstone is evicted to make room. HTTP admission is bounded to32 concurrent
+requests/64 connections,1 MiB signed requests and bounded replies. Stop
+proofs close the D1 physical reservation; logical cancellation never does.
+SIGTERM/SIGINT stop admission, request cancellation, and wait for owned cleanup.
+
+### Supervisor Function map
+
+| Module / function | Responsibility |
+| --- | --- |
+| `scripts/provision-execution.mjs` | Create three real keypairs and usable private Worker/supervisor configuration |
+| `runner/main.mjs::runSupervisor` | Privately load keys/configuration and handle operator process lifecycle |
+| `runner/server.mjs::startSupervisor` | Loopback HTTP, signature/replay admission, truthful health, bounded routing and shutdown |
+| `runner/journal.mjs::openJournal` | Single-instance flock, fsynced bounded journal and serialized admission/fences |
+| `runner/registry.mjs::validatePermit`, `stageInputs` | Exact shared registry/permit comparison and verified private asset staging |
+| `runner/executor.mjs::createExecutor` | Async stable identity, actual workspace/exec lifecycle, checkpoint supervision, restart cleanup and retained content |
+| `runner/receipts.mjs::makeReceipt`, `streamEvidence` | Separate evidence signing and exact retained-byte metadata |
+| `runner/client.mjs` | Node entry for the shared signed transport client |
+| `runner/workspaces.mjs::startExecution` | Persist exact exec ID/start intent and actual start acknowledgement before success retention |
+
+### Real end-to-end verification
+
+```sh
+npm run build
+npm run test:execution
+npm run test:backend:integration
+```
+
+The last command uses the built Worker, fresh D1, synthetic real RS256 Access
+identities, separate ephemeral P-256 roles, loopback supervisor and actual Docker.
+It verifies signed checkpoint directions, authorized execution, retained artifact
+bytes and physical closure, then drives the execution UI through approval/start,
+real results/download and account switch. Browser traffic uses the strict owned
+loopback proxy/CDP observation harness; blocked origins remain recorded.
+`TEST_CHROMIUM_EXECUTABLE=/absolute/chromium` selects a trusted local browser when
+needed. Docker/build/browser suites run serially so unrelated host load does not
+consume execution budgets. CI preserves existing identity/planning/browser gates
+and adds this actual backend gate with trusted host proc access.

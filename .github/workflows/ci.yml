@@ -46,7 +46,13 @@ jobs:
         run: |
           runner_node="$(command -v node)"
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
-            --experimental-strip-types --test tests/execution/*.test.mjs
+            --experimental-strip-types --test --test-concurrency=1 tests/execution/*.test.mjs
+      - name: Verify real Worker, Access identity, supervisor, Docker and execution UI
+        run: |
+          runner_node="$(command -v node)"
+          sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin \
+            PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" "$runner_node" \
+            --experimental-strip-types tests/execution/backend-worker.mjs
       - run: npm run test:browser-policy
       - run: npm run test:auth
       - name: Verify identity in the already-built Worker
