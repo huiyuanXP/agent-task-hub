@@ -33,3 +33,20 @@ test('control provisioning rejects public and normalized loopback origins before
   const target=join(root,'keys-'+i);const result=spawnSync(process.execPath,['--experimental-strip-types','scripts/provision-execution.mjs',target,origin,'http://127.0.0.1:4210'],{encoding:'utf8'});assert.notEqual(result.status,0,origin);await assert.rejects(stat(target),{code:'ENOENT'});
  }
 });
+
+test('printed startup commands preserve unusual private paths as literal POSIX shell arguments',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'execution-shell-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const target=join(root,'keys $ATH_PROVISION_TEST_SEGMENT $(printf substituted) `printf backtick` \'single\' "double" \\backslash * ?');
+ const result=spawnSync(process.execPath,['--experimental-strip-types','scripts/provision-execution.mjs',target,'http://127.0.0.1:3000','http://127.0.0.1:4210'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+ for(const [prefix,args] of [
+  ['Start control server: ',['--experimental-strip-types','scripts/server.mjs','--execution-config',join(target,'control.json')]],
+  ['Start Runner: ',['--experimental-strip-types','runner/main.mjs',join(target,'runner.json')]],
+ ]){
+  const line=result.stdout.split('\n').find(line=>line.startsWith(prefix));assert.ok(line);
+  // A real POSIX shell parses the printed command. Capture its actual argv
+  // instead of starting either service; substitutions here can only print.
+  const parsed=spawnSync('/bin/sh',[],{input:'node() { printf \'%s\\0\' "$@"; }\n'+line.slice(prefix.length)+'\n',env:{...process.env,ATH_PROVISION_TEST_SEGMENT:'expanded'},encoding:'utf8'});
+  assert.equal(parsed.status,0,parsed.stderr);assert.deepEqual(parsed.stdout.split('\0').slice(0,-1),args);
+  assert.ok(JSON.parse(await readFile(args.at(-1),'utf8')));
+ }
+});

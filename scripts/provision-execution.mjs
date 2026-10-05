@@ -4,6 +4,10 @@ import { randomUUID, webcrypto } from 'node:crypto';
 import { REGISTERED_OPERATIONS } from '../lib/execution/registry.mts';
 import { localControlOrigin } from './execution-config.mjs';
 
+function shellArgument(value) {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 async function pair(role) {
   const keys = await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'}, true, ['sign','verify']);
   const keyId = role + '-' + randomUUID();
@@ -47,8 +51,8 @@ try {
     await writeFile(join(root, name), JSON.stringify(value, null, 2) + '\n', {mode:0o600, flag:'wx'});
   }
   console.log('Created private execution configuration in ' + root);
-  console.log('Start control server: node --experimental-strip-types scripts/server.mjs --execution-config ' + JSON.stringify(join(root, 'control.json')));
-  console.log('Start Runner: node --experimental-strip-types runner/main.mjs ' + JSON.stringify(join(root, 'runner.json')));
+  console.log('Start control server: node --experimental-strip-types scripts/server.mjs --execution-config ' + shellArgument(join(root, 'control.json')));
+  console.log('Start Runner: node --experimental-strip-types runner/main.mjs ' + shellArgument(join(root, 'runner.json')));
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
