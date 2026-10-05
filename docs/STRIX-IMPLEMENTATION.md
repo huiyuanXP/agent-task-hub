@@ -127,3 +127,16 @@ Both dependency locks are preserved. Full local Docker acceptance remains depend
 on the upstream backend prerequisites; hosted CI retains all mandatory checks.
 No deployment, production data migration, live callback registration, Ticket
 execution, issue-specific push or PR is part of this implementation task.
+
+## #10 final review and controller verification
+
+Task-level and whole-issue independent reviews approve the source with no Critical or Important findings. Dense lifecycle formatting, a forced manual-initial-insert/Idea-edit race test, and expected negative/framework diagnostic noise are recorded as non-blocking follow-ups. The controller fast-forwarded the primary checkout to the reviewed source, then completed a fresh build, all six actual authenticated lifecycle groups, lint and TypeScript with exit 0. Both locks are preserved. Full hosted acceptance including the mandatory Docker suite remains required before merging this issue.
+
+The following decisions were made under the user’s authorization to proceed autonomously; each records its practical cost if reconsidered.
+
+- Use D1 outbox/cron instead of adding Cloudflare Queues — existing durable storage avoids unprovisioned infrastructure while meeting ticket recovery needs — if wrong, replace dispatch adapter later; persistent events/attempts remain useful.
+- Continue local application checks with existing absent Docker prerequisite, preserving full hosted Docker CI — no change touches runner implementation, and user authorized autonomous ticket delivery — if hosted CI fails, resolve before merging; do not claim full local suite success.
+- Task1 claim/save guards take a single trusted clock instant for each atomic save batch, with same-owner Idea joins — recovery must never permit partial stale Plan entries around lease equality — if wrong, strict guard can reject a planner requiring a fresh claim.
+- An expired planning claim without an active matching subscription clears its old token and persists a fresh generation/reason without spending automatic recoveries — the no-subscription rule must preserve recovery budget while revoking expired authority — if wrong, unattended poll-only consumers can exceed the usual recovery-generation budget; same-owner CAS/current revision guards still bound authority. Queued no-subscription ticks must not repeatedly regenerate.
+- An accepted event's wake deadline survives subscription expiry; only when due may an unclaimed disconnected job create one fresh generation without spending automatic recoveries — same subscription refresh before5minutes must retain accepted event/generation, after deadline must be able to wake again — if wrong, disconnect/reconnect loops can create budget-free generations at the acknowledgement interval; repeated no-subscription cron must not churn and exhausted jobs remain terminal. Implementer identified actual stuck reconnect path and adds RED/covering checks before commit.
+- Limit invalidation to50 targetrows TOTAL per deliverDue, stable ordering and optionalowner/jobscope — specrequiresboundedhousekeeping butdidn'tgivea targetcap;50 matchesdiscoverybatchscale — if wrong, dormantcleanup takesadditionalticks; currentQueued/activeTarget sendguards must remain independent of cleanup.
