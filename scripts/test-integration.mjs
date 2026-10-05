@@ -37,6 +37,11 @@ try {
   };
   await command('install', 'npm', ['run', 'install:ci']);
   await command('build', 'npm', ['run', 'build']);
+  // Synthetic loopback baseline only; independent identity has its own Worker suite.
+  const previewConfigPath = join(workspace, 'dist/server/wrangler.json');
+  const previewConfig = JSON.parse(await readFile(previewConfigPath, 'utf8'));
+  previewConfig.vars = { ...previewConfig.vars, AUTH_MODE: 'trusted-sites', AUTH_TRUST_SITES_HEADERS: '1' };
+  await writeFile(previewConfigPath, JSON.stringify(previewConfig, null, 2) + '\n');
   const migrations = (await readdir(join(workspace, 'drizzle'))).filter(name => name.endsWith('.sql')).sort();
   if (!migrations.length) throw new Error('No SQL migrations found');
   for (const file of migrations) await command('migration-' + file, process.execPath, [

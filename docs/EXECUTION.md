@@ -7,9 +7,12 @@ source field. Execution Runs always return `source: "execution"`. Creating a Run
 freezes data; it never dispatches a process or creates an authorization grant.
 An authorization ID here is an immutable reference, not proof of approval.
 
-The control plane uses the existing trusted Sites identity. Do not expose its
-identity-header API directly on an independent public host. Local integration
-uses synthetic identities only on loopback with fresh database state.
+The control plane consumes the verified request identity described in
+[AUTHENTICATION.md](AUTHENTICATION.md). Built Workers default to Cloudflare Access
+and explicit private membership. Account access does not grant an execution
+approval or backend capability. Existing standalone execution fixtures explicitly
+use trusted synthetic Sites compatibility on loopback with fresh D1 state; the
+authentication suites separately verify real JWT identity on the built Worker.
 
 ## HTTP contract
 
@@ -69,10 +72,11 @@ SQL also enforces the graph and terminal absorption:
 | waiting | queued, running, failed, cancelled |
 | succeeded, failed, cancelled | none |
 
-Apply ordered additive migrations to a fresh database for validation:
-`0000_lethal_shadow_king.sql`, `0001_keen_eddie_brock.sql`,
-`0002_execution_runs.sql`. The Drizzle schema, journal and generated snapshot
-track the new table and constraints; regenerating migrations reports no changes.
+Apply every committed `drizzle/*.sql` migration in filename order exactly once
+to fresh isolated D1 state for validation, including authorization and auth
+revocation tables added after the execution Run migration. Never reapply raw
+SQL to an existing schema. The Drizzle schema, journal and generated snapshots
+track these tables and constraints.
 Triggers are retained explicitly in the ordered SQL migration. No existing
 records, jobs or subscriptions are rewritten.
 
@@ -137,7 +141,7 @@ implemented now; unconfigured Run creation/cancellation cannot imply execution.
 | `handleExecutionRequest(db, context, request): Promise<Response>` | Authenticate supplied context, enforce HTTP boundary, expose create/read/cancel and map errors |
 | `ExecutionError(code, message, status)` | Typed expected domain/HTTP errors |
 | `exactObject`, `boundedId`, `positiveInteger`, `invalid` | Shared strict input guards and typed validation failure |
-| route `GET` / `POST` | Obtain trusted Sites identity and D1, delegate with server-derived owner/actor |
+| route `GET` / `POST` | Obtain verified request identity and D1, delegate with server-derived owner/actor |
 
 ## Verification
 
@@ -149,13 +153,13 @@ Node >=22.13 is required. Preserve the existing lockfile and install with
 The storage tests use real native SQLite and separate database connections.
 The HTTP tests exercise the handler against those databases. The API command
 loads the actual built ES modules in Miniflare's native workerd runtime, applies
-all migrations to isolated temporary D1, and sends HTTP requests to loopback
-port 5197. It verifies authentication, owner scoping, revision/idempotency,
+all migrations to isolated temporary D1, and sends HTTP requests to a dynamically assigned loopback
+port. These fixtures explicitly enable synthetic Sites compatibility. It verifies authentication, owner scoping, revision/idempotency,
 initial identical and distinct-request creation races, concurrent retries,
 schema/media/body limits, cancellation, next attempts, legacy
 immutability and manual display. The runtime and its database are removed after
-validation. Rebuild first so the API command tests current code. Port 5197 must
-be free. This harness intentionally bypasses Wrangler's development proxy,
+validation. Rebuild first so the API command tests current code, then keep
+that artifact stable while the suite runs. This harness intentionally bypasses Wrangler's development proxy,
 which was observed to emit a restart 503 between rejected large requests;
 the same workerd application returns the required 413 directly.
 
@@ -313,7 +317,7 @@ registry/revision invalidation, scope/budget enforcement and caller snapshots.
 The real catalog argv is executed with native Node, verifying the retained JSON
 artifact and rejecting changed input. HTTP/MCP tests exercise shared services
 against that storage. `node --experimental-strip-types tests/execution/authorization-worker.mjs`
-loads the built Worker with fresh D1 and static assets on loopback 5197, checks
+loads the built Worker with fresh D1 and static assets on a dynamically assigned loopback port, checks
 concurrent atomic preparation and shared owner decisions, then drives
 configured or Playwright-managed Chromium through
 pending/approve/revoke/reload/cancel/fresh-request/reject. It blocks all browser
@@ -323,8 +327,10 @@ HTTP and removes its synthetic database/runtime on completion.
 The browser test always runs; missing tooling or a missing Chromium executable
 fails with setup instructions before any Worker/D1 state is created. By default
 it loads `import("playwright")` and uses Playwright's installed Chromium. To keep
-application dependencies and the lockfile unchanged, install tooling in a new
-owned temporary directory outside the repository:
+application dependencies and the lockfile unchanged, prefer the separately
+locked browser package (`npm ci --prefix tests/browser`) and set
+`EXECUTION_PLAYWRIGHT_MODULE=./tests/browser/node_modules/playwright/index.mjs`.
+An optional external tooling directory also works:
 
 ```bash
 execution_tools=$(mktemp -d "${TMPDIR:-/tmp}/execution-browser-tools.XXXXXX")
@@ -335,7 +341,7 @@ PLAYWRIGHT_BROWSERS_PATH="$execution_tools/browsers" \
 node --experimental-strip-types tests/execution/authorization-worker.mjs
 ```
 
-Run `npm run build` first and keep loopback port5197 free. Alternatively set
+Run `npm run build` first and do not rebuild while the suite runs. Alternatively set
 `EXECUTION_CHROMIUM_PATH` to an installed system Chromium executable; then the
 Playwright browser download is unnecessary. `EXECUTION_PLAYWRIGHT_MODULE` accepts
 an explicit module file path/URL or an importable package specifier. Set optional

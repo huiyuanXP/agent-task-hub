@@ -48,6 +48,10 @@ jobs:
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
             --experimental-strip-types --test tests/execution/*.test.mjs
       - run: npm run test:browser-policy
+      - run: npm run test:auth
+      - name: Verify identity in the already-built Worker
+        run: node --experimental-strip-types tests/auth/worker-api.mjs
+      - run: npm run test:auth:browser
       - run: npm run test:integration
       - name: Upload failure logs and synthetic browser evidence
         if: failure()

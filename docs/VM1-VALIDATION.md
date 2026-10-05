@@ -1,5 +1,7 @@
 # VM1 initialization and validation
 
+> Historical VM1 baseline: the identity observations below describe the imported version. Independent JWT verification, private membership, sessions and logout are now implemented; see [AUTHENTICATION.md](AUTHENTICATION.md) and [TESTING.md](TESTING.md). Live provider/ingress acceptance remains separate.
+
 Validated on **2026-10-04 UTC**, on `ssh-vm-1`, in `/home/agent/projects/agent-task-hub`.
 
 ## Outcome and scope

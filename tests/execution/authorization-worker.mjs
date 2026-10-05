@@ -5,7 +5,7 @@ import { accessSync, constants, mkdtempSync, readFileSync, readdirSync, rmSync }
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-const base = 'http://127.0.0.1:5197';
+let base;
 let temporary, worker, browser;
 const identity = { 'oai-authenticated-user-id': 'owner-local', 'oai-authenticated-user-email': 'owner-local@example.test' };
 async function request(path, body, headers = {}) {
@@ -32,8 +32,9 @@ try {
   // Resolve and launch browser prerequisites before creating any Worker/D1 state.
   temporary = mkdtempSync(join(tmpdir(), 'authorization-worker-'));
   const config = JSON.parse(readFileSync('dist/server/wrangler.json', 'utf8'));
-  worker = new Miniflare({ host: '127.0.0.1', port: 5197, modulesRoot: 'dist/server',
+  worker = new Miniflare({ host: '127.0.0.1', port: 0, modulesRoot: 'dist/server',
     modules: [config.main, ...readdirSync('dist/server', { recursive: true }).filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
+    bindings: { AUTH_MODE: 'trusted-sites', AUTH_TRUST_SITES_HEADERS: '1' },
     compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags,
     d1Databases: { DB: '00000000-0000-4000-8000-000000000000' }, d1Persist: join(temporary, 'd1'),
     assets: { directory: 'dist/client', binding: 'ASSETS', routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: false } },
@@ -42,7 +43,7 @@ try {
   for (const migration of readdirSync('drizzle').filter(name => name.endsWith('.sql')).sort()) for (const statement of readFileSync(join('drizzle', migration), 'utf8').split('--> statement-breakpoint').filter(sql => sql.trim())) await db.prepare(statement).run();
   const now = new Date().toISOString();
   await db.prepare('INSERT INTO records VALUES (?,?,?,?,?,?,?)').bind('ticket-local', 'owner-local', 'ticket', '{"title":"Browser authorization Ticket","status":"todo","project":"Synthetic"}', 1, now, now).run();
-  await worker.ready;
+  base = (await worker.ready).origin;
   console.log('Worker/D1 ready; reading catalog');
   const catalog = await request('/api/authorization?ticketId=ticket-local&expectedRevision=1');
   assert.equal(catalog.status, 200, JSON.stringify(catalog));

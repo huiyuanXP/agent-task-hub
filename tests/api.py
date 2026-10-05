@@ -152,7 +152,7 @@ try:
     assert 'Max-Age=0' in out['Set-Cookie']
     request(DEV,'/api/records',headers={'Cookie':'__sites_local_auth='},status=401)
     ok('mock sign-out expires cookie and anonymous access is denied')
-    (OUT / 'api-evidence.json').write_text(json.dumps({'status':'passed','checks':checks,'synthetic_records_only':True,'external_callbacks':False,'limitations':['Built preview trusts Sites identity headers; independent verified identity is not implemented.','No successful external webhook or execution adapter exercised.']},indent=2)+'\n')
+    (OUT / 'api-evidence.json').write_text(json.dumps({'status':'passed','checks':checks,'synthetic_records_only':True,'external_callbacks':False,'limitations':['Built preview explicitly selects synthetic trusted-sites compatibility; independent Access identity has separate acceptance suites.','No successful external webhook or execution adapter exercised.']},indent=2)+'\n')
 except Exception:
     (OUT / 'api-evidence.json').write_text(json.dumps({'status':'failed','checks_completed':checks},indent=2)+'\n')
     raise

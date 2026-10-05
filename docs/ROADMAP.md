@@ -2,7 +2,7 @@
 
 Current tracking lives in [GitHub roadmap issue #27](https://github.com/huiyuanXP/agent-task-hub/issues/27), with the [published issue index](GITHUB-ISSUE-ROADMAP.md). The outline below is the original migration handoff; initial VM1 verification has since completed, and open implementation/integration work is tracked in those issues.
 
-Concise handoff based on the existing migration plan summary. This is a roadmap, not a live task/database export or a claim that implementation has begun. The exact persisted ticket bodies were not queried during packaging. All tickets remain proposed migration work; each stage gates dependent stages.
+Concise handoff based on the existing migration plan summary. This is a roadmap, not a live task/database export or a claim that implementation has begun. The exact persisted ticket bodies were not queried during packaging. This historical outline does not reflect current completion status; each stage gates dependent stages. Independent identity is now implemented and locally verified in source (see [AUTHENTICATION.md](AUTHENTICATION.md)); new provider resources and live operational acceptance remain separately scoped.
 
 ## 01. Remote and baseline
 

@@ -29,7 +29,10 @@ try {
   await page.goto(dev + '/signin-with-chatgpt?return_to=/', { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: '收集点子', exact: true }).waitFor();
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).waitFor();
-  ok('Signed-in UI hydrates and loads persisted API records');
+  await page.getByLabel('当前账户').getByText('Seedy', { exact: true }).waitFor();
+  await page.getByText('本地开发身份').waitFor();
+  assert.equal(await page.getByLabel('账户缩写').innerText(), 'S');
+  ok('Signed-in UI hydrates with actual development identity and label');
 
   const browserTitle = 'Regression browser synthetic idea ' + Date.now();
   await page.getByRole('textbox', { name: '快速记录点子' }).fill(browserTitle);
@@ -88,7 +91,14 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: browserTitle, exact: true }).waitFor();
   ok('Synthetic records persist across browser reload');
-  await page.goto(preview + '/', { waitUntil: 'networkidle' });
+  const logout = page.waitForResponse(response => response.url() === dev + '/signout-with-chatgpt' && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  assert.equal((await logout).status(), 303);
+  await page.getByRole('link', { name: '登录', exact: true }).waitFor();
+  assert.equal((await context.cookies()).some(cookie => cookie.name === '__sites_local_auth'), false);
+  ok('Development logout uses POST and removes local identity');
+  // The page polls session state; readiness is its rendered denial, not global network idleness.
+  await page.goto(preview + '/', { waitUntil: 'domcontentloaded' });
   await page.getByRole('alert').waitFor();
   assert.match(await page.getByRole('alert').innerText(), /登录/);
   ok('Built preview hydrates and displays anonymous API auth failure');

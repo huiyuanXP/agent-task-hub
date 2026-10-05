@@ -20,6 +20,8 @@ Persist execution Runs separately from historical manual `records.kind=run`.
 Keep immutable contract and identity columns separate from mutable lifecycle
 columns. Use SQL compare-and-swap and unique keys, never read-then-write as the
 only concurrency guard. Apply additive ordered migrations; preserve old data.
+Main now includes identity revocation migration `0004_woozy_jimmy_woo.sql`; the
+next execution-dispatch migration is currently `0005`, subject to the actual branch.
 
 The execution backend is a real Node process in a hardened Docker container,
 managed by a separate loopback-only Node supervisor. This is an actual bounded
@@ -39,9 +41,13 @@ separate signing material. Missing verifier configuration refuses success.
 
 ## Existing boundaries
 
-Use the current trusted Sites ingress and owner identity. Standalone public
-identity (#3) and public deployment (#5) remain separate existing release gates;
-these changes never enable a public host or change the production Site.
+Use the verified request-scoped account identity now merged in main (#3): the
+Worker verifies Cloudflare Access RS256 application JWTs, issuer/audience and
+explicit membership, derives stable issuer/subject owners, and strips caller
+Sites identity headers. Trusted-sites compatibility requires explicit fixture
+bindings and is not the independent production boundary. Public deployment and
+live provider configuration (#5) remain separate release gates; these changes
+never enable a public host or change the production Site.
 Local synthetic identities and newly created test data are permitted solely for
 isolated loopback integration tests. No production records or credentials.
 Unconfigured execution rejects requests explicitly and never marks a Run done.

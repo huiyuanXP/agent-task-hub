@@ -2,7 +2,7 @@
 
 Source handoff for a private task-planning workspace: Ideas → Plans → Tickets, execution snapshot records, history, and a planning-only MCP/event interface. Chinese-language application UI.
 
-**This is the current Sites application source, not the proposed independent app-server runner.** Public authentication, a production-independent identity provider, and the task-execution adapter are not implemented. The existing live Site remains owner-private and separate from this archive.
+**Built Workers now verify independent Cloudflare Access identity and private membership.** New Access registration, private ingress and live SSO validation remain separately authorized work under issue #5; the task-execution adapter is not implemented. The original live Site remains separate. See [authentication configuration and boundaries](docs/AUTHENTICATION.md).
 
 ## Source and safe separation
 
@@ -29,30 +29,31 @@ npm run build
 
 A clean clone defaults to the portable execution profile. Build output is `dist/`; the generated Worker configuration is `dist/server/wrangler.json`. No dependencies were installed or build rerun while creating this archive.
 
-For a **fresh local database only**, apply both committed migrations in order after building:
+For a **fresh local database only**, apply every committed migration once in filename order after building. Use a new isolated checkout or ensure `.wrangler/state` has never been initialized:
 
 ```sh
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_lethal_shadow_king.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_keen_eddie_brock.sql
+for migration in drizzle/*.sql; do
+  node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file "$migration" || exit 1
+done
 npm run dev
 ```
 
 Open the loopback URL printed by the dev server (normally `http://localhost:5173`). Visit `/signin-with-chatgpt?return_to=/` there to use the development-only mock identity. It is synthetic and does not log into a real account. Local records are initially empty. Do not reapply these raw SQL files to a database that already has their schema.
 
-`npm start` previews the built Worker on loopback using the same local D1 state, but does **not** simulate sign-in; use the development server for authenticated local UI work. Keep mock-auth development servers private and loopback-only.
+`npm start` previews the built Worker on loopback using the same local D1 state, and defaults to fail-closed Access verification. Independent serving requires the public metadata, private membership and exact HTTPS origin in [AUTHENTICATION.md](docs/AUTHENTICATION.md); the loopback preview URL is not that origin. Use the development server for synthetic local UI work or `npm run test:auth:browser` for isolated verification of the built identity flow. Keep mock-auth development servers private and loopback-only.
 
 The `.env.example` contains only optional non-secret tooling switches. Local preview needs no copied production secrets. The application reads the `DB` runtime binding rather than a database connection-string variable.
 
 ## Regression checks
 
-Run `npm ci --prefix tests/browser` and `npx --prefix tests/browser playwright install --with-deps chromium` after the locked application install, then run `npm test`. The suite builds a fresh temporary application and D1 database, selects loopback ports and cleans up its servers after each run. `npm run test:unit` runs harness boundary checks; `npm run test:browser-policy` checks redirected requests and browser network isolation; `npm run test:integration` runs synthetic API/MCP and browser regressions. See [testing instructions](docs/TESTING.md) for parallel runs, artifacts and the synthetic identity boundary. PRs and pushes to `main` or `strix/**` run the same checks in CI.
+Run `npm ci --prefix tests/browser` and `npx --prefix tests/browser playwright install --with-deps chromium` after the locked application install, then run `npm test`. The suite builds a fresh temporary application and D1 database, selects loopback ports and cleans up its servers after each run. `npm run test:auth` checks the token policy; `npm run test:auth:api` builds and tests the actual independent Worker; `npm run test:auth:browser` exercises its session UI against ephemeral signed identities. `npm run test:unit` runs harness boundary checks; `npm run test:browser-policy` checks redirected requests and browser network isolation; `npm run test:integration` runs synthetic API/MCP and browser regressions. See [testing instructions](docs/TESTING.md) for parallel runs, artifacts and the synthetic identity boundary. PRs and pushes to `main` or `strix/**` run the same checks in CI.
 
 ## Repository layout
 
 - `app/page.tsx`, `app/globals.css`: workspace UI
 - `app/api/records`, `app/api/planning`: authenticated records and planning status
 - `app/mcp/route.ts`: planning tools, event subscriptions, claim/save protocol
-- `app/chatgpt-auth.ts`: Sites identity-header helpers
+- `lib/access-identity.mts`, `lib/authentication.ts`, `app/chatgpt-auth.ts`: verified request identity and session boundary
 - `lib/events.ts`, `lib/planning-state.ts`: delivery and revision-aware planning
 - `db/`, `drizzle/`: schema, ordered migrations, and migration metadata
 - `build/`, `scripts/`: **source code** for build/runtime integration; retain these folders

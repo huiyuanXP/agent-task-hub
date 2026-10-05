@@ -9,9 +9,10 @@
 
 ## Global Constraints
 
-- Node >=22.13.0; preserve application `package-lock.json` and installed versions.
+- Node >=22.13.0; preserve the latest-main approved application `package-lock.json` and installed versions.
 - No production records, credentials, Site reconnection or public deployment.
-- Trusted Sites ingress is the existing identity boundary; all access is owner scoped.
+- Main now provides verified Cloudflare Access JWT identity (#3), issuer/subject-derived owners and request-scoped session state; caller Sites headers are stripped. All access is owner scoped. Trusted-sites mode is explicitly configured only for compatible trusted ingress or synthetic fixtures, never an implicit public bypass.
+- Main includes `0004_woozy_jimmy_woo.sql` for identity revocation. Task4 dispatch migrations start at `0005` unless newer main migrations land; inspect the actual branch before adding one.
 - All test and supervisor listeners bind loopback; each test owns a fresh database.
 - No placeholders, unfinished branches or new Tickets standing in for acceptance.
 - One implementation task at a time; root owns GitHub claims, PRs, merges and completion comments.

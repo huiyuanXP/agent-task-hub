@@ -51,3 +51,41 @@ Built-preview owner checks deliberately supply trusted synthetic Sites identity 
 The first #4 review found that Playwright HTTP routes skip later URLs in redirect chains. A real Playwright 1.58.2 loopback probe reproduced one forbidden-origin request. The review fix routes Chromium through a temporary loopback proxy with the implicit loopback bypass disabled, validates every request/upgrade before forwarding, disables service workers, and closes owned sockets/listeners. Native redirect URLs, cookies, hydration and modified-click popups remain intact. Approved plain WebSocket CONNECT requests are parsed as HTTP and revalidated rather than relayed as opaque TCP; TLS and off-target tunnels remain blocked.
 
 Fix verification: seven real browser-policy regressions passed with zero forbidden document/fetch/popup/worker requests, zero off-target CONNECT or page/worker WebSocket connections, and zero forwarded opaque TLS connections. The full `npm test` passed 11 harness tests, seven policy tests, 12 API/MCP groups and eight Chromium groups; the final policy rerun included explicit worker-WebSocket coverage. Lint and TypeScript passed. Application source, lint rules and both lockfiles remain unchanged; targeted generated-directory ignores were added. Logs and the scoped review report remain in ignored `.superpowers/sdd/2026-10-04-isolated-regression/`; no parallel D1 repetition was needed for this browser-policy fix.
+
+## Issue #3 — independent private account identity
+
+Built Workers now fail closed to Cloudflare Access verification with explicit
+team/audience/application-origin metadata and private membership. JOSE validates
+RS256 application JWTs against only the configured team certs endpoint. All
+caller Sites identity headers are stripped; one request-scoped identity serves
+UI, APIs and MCP. Owners are issuer/subject hashes, independent of mutable email.
+D1 local token-hash revocation makes same-origin POST logout immediately effective.
+Provider registration, ingress, live SSO and upstream logout remain issue #5;
+production owner reconciliation remains issue #7. Account membership does not
+grant execution approval or backend authority.
+
+The UI consumes the safe no-store session DTO, displays verified name/initials,
+labels development identity and submits real POST logout. Authentication denial,
+account switching and supplied expiry clear private rows, draft, capture,
+planning state and filters. Sequence guards prevent delayed old refreshes from
+restoring data. Temporary network/storage failures remain distinct. A built
+browser test exposed Vinext's production home-link client navigation error;
+the already-mounted home reset now prevents that redundant navigation while
+modified clicks preserve native link behavior.
+
+Verifier, actual Worker and real Chromium acceptance use fresh synthetic keys,
+private members and isolated D1 with every migration applied once. The browser
+fixture has a test-only loopback ingress that translates to a synthetic configured
+HTTPS origin, preserves real JWT verification and uses the existing restrictive
+network proxy. No provider keys, live accounts, production records, successful
+live login, deployment or execution backend are involved. Existing synthetic
+Sites compatibility requires both explicit trust settings and remains separately
+identified in tests. See [AUTHENTICATION.md](AUTHENTICATION.md) and
+[TESTING.md](TESTING.md) for configuration, boundaries and repeatable commands.
+
+Task-level RED/GREEN logs and the complete verification report are retained in
+ignored `.superpowers/sdd/2026-10-04-independent-identity/`. The root dependency
+lock adds only pinned JOSE 6.2.12 across this issue; all pre-existing package
+versions and the separate browser lock are preserved. No lint rule was weakened.
+Controller review, issue-specific push/PR and hosted CI remain the controller's
+responsibility; no deployment is part of this source change.
