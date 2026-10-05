@@ -1,4 +1,4 @@
-import type { EvidenceClaims, ExecutionEvidence, EvidenceTrust, Run } from './types.mts';
+import type { EvidenceClaims, LegacyExecutionEvidence, EvidenceTrust, Run } from './types.mts';
 
 const encoder = new TextEncoder();
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -15,7 +15,7 @@ function timestamp(value: unknown): value is string {
   return typeof value === 'string' && value.length === 24 && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 /** Validate every signed field before serializing or retaining evidence. */
-export function isExecutionEvidence(value: unknown): value is ExecutionEvidence {
+export function isExecutionEvidence(value: unknown): value is LegacyExecutionEvidence {
   if (!object(value, ['claims', 'signature']) || typeof value.signature !== 'string' || !/^[a-f0-9]{128}$/.test(value.signature) || !object(value.claims, claimsKeys)) return false;
   const c = value.claims;
   if (c.version !== 1 || c.status !== 'succeeded' || c.exitCode !== 0 ||

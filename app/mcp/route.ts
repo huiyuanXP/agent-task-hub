@@ -1,3 +1,5 @@
+import { env } from "cloudflare:workers";
+import { configuredRegistry } from '../../lib/execution/backend-config.mts';
 import { backfillPlanning } from "../../lib/planning-recovery";
 import type {
   JsonSchema,
@@ -336,7 +338,7 @@ export async function POST(req: Request) {
     if (taskReadResult !== undefined) return respond({
       content: [{ type: "text", text: JSON.stringify(taskReadResult) }], structuredContent: taskReadResult, isError: false,
     });
-    const executionResult = await dispatchExecutionTool(db, { owner, actor: owner, grantAuthority: "owner" }, p.name as string, p.arguments);
+    const executionResult = await dispatchExecutionTool(db, () => ({ owner, actor: owner, grantAuthority: "owner", registry: configuredRegistry(env) }), p.name as string, p.arguments);
     if (executionResult !== undefined) return respond({
       content: [{ type: "text", text: JSON.stringify(executionResult) }], structuredContent: executionResult, isError: false,
     });

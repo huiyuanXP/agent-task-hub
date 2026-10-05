@@ -124,6 +124,38 @@ produce succeeded. Bound evidence sizes and validate it server-side. Supply
 complete protocol tests and a working consumer CLI with connection, claim,
 renewal, progress, completion and shutdown handling.
 
+Authenticate a finite, revocable per-Run worker delegation at the Worker boundary
+before MCP dispatch. Keep the worker principal distinct from an owner user and
+from the internal supervisor service principal; it conveys no grant decisions,
+planning/record access or credential-provisioning authority. The runtime consumer
+holds no owner JWT. An owner-only bootstrap provisions a credential bound to an
+existing owned frozen Run, at most15minutes and no later than its verified Access
+credential expiry; provisioning-token logout/revocation and allowed-account
+removal invalidate it. Invalid worker credentials never fall back to ambient
+owner authentication. Worker labels and MCP session IDs are not credentials.
+
+Use generation-bound exclusive six-second leases, with execution renewal every
+two seconds. A valid delegation can claim/reclaim; an expired lease alone cannot.
+Execution claims/start/renew require a current approved grant. Separate short,
+non-renewable reconciliation leases allow only observing an existing permitted
+attempt, ingesting its trusted historical result and requesting its owned stop;
+they never authorize another process or extend any execution deadline. A revoked
+delegation blocks both modes. Cached idempotent writes still require current
+credential, lease and action authority.
+
+For bootstrap and claim response loss, the CLI creates random32-byte secrets and
+stable public IDs, persists them to private fsynced state before network writes,
+and submits only verifiers. D1 retains immutable verifier/request bindings, never
+plaintext or reversible secrets. Exact retries reuse the binding/generation;
+changed requests conflict and expired generations never revive. Lost local
+secrets require revoke/reprovision. Supply working bootstrap/run/revoke commands,
+concurrent renewals, complete MCP negotiation and bounded schemas/transport.
+Optional machine-ingress credentials remain separate from application authority
+and go only to a fixed HTTPS origin without redirects. A hosted consumer needs
+the existing deployment gate's provisioned machine ingress path. Local actual
+Worker/D1/CLI/supervisor/Docker tests prove the application protocol without
+changing production Access configuration or claiming hosted deployment.
+
 ## Cross-service decisions
 
 - Authorization is an owner decision, not a capability conveyed by a worker
@@ -208,6 +240,13 @@ renewal, progress, completion and shutdown handling.
   headers or owner decision capability. Fixed configured URLs reject redirects;
   fresh verified authorization gates start and bounded checkpoint outage cancels
   running work without changing its hard deadline.
+  Preserve verified Access user authentication on owner endpoints. The narrow
+  checkpoint authenticates its independent signed service capability through
+  the Worker boundary before any D1 lookup, without owner decision permission.
+  Execution UI clears cached state on denial, account switch or expiry and
+  rejects obsolete responses while distinguishing temporary outages. Provide
+  usable provisioning for all three separate keypairs with private file modes
+  and matching public configuration; no dummy-key implementation gap remains.
 - Cancellation intent and physically confirmed container stop are distinct.
   Revocation prevents new dispatch permits/renewals, requests bounded in-flight
   cancellation, and cannot retroactively turn an absorbing cancelled Run into

@@ -19,7 +19,6 @@ export const executionTools = [
 ];
 /** Focused dispatcher: existing planning tools remain in their original route. */
 async function dispatch(db: ExecutionDatabase, context: AuthorizationContext, name: string, args: unknown): Promise<unknown> {
-  if (!executionTools.some(tool => tool.name === name)) return undefined;
   if (name === 'get_operation_catalog') {
     exactObject(args, ['ticketId', 'expectedRevision']);
     return getOperationCatalog(db, context, args as unknown as { ticketId: string; expectedRevision: number });
@@ -33,8 +32,14 @@ async function dispatch(db: ExecutionDatabase, context: AuthorizationContext, na
 }
 
 /** Isolate unexpected execution storage/crypto errors from legacy route diagnostics. */
-export async function dispatchExecutionTool(db: ExecutionDatabase, context: AuthorizationContext, name: string, args: unknown): Promise<unknown> {
-  try { return await dispatch(db, context, name, args); }
+export async function dispatchExecutionTool(db: ExecutionDatabase, context: AuthorizationContext | (() => AuthorizationContext), name: string, args: unknown): Promise<unknown> {
+  if (!executionTools.some(tool => tool.name === name)) return undefined;
+  try {
+    let resolved: AuthorizationContext;
+    try { resolved = typeof context === 'function' ? context() : context; }
+    catch { throw new ExecutionError('CONFIGURATION_UNAVAILABLE', 'Execution configuration unavailable', 503); }
+    return await dispatch(db, resolved, name, args);
+  }
   catch (error) {
     if (error instanceof ExecutionError) throw error;
     throw new ExecutionError('STORAGE_UNAVAILABLE', 'Execution storage unavailable', 503);
