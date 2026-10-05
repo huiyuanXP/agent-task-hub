@@ -176,3 +176,21 @@ host proc permissions. A machine without Docker cannot claim full-suite success;
 run application/auth/planning/browser/integration checks separately and retain the
 full command's failures. Hosted Ubuntu CI supplies the explicit Docker boundary
 without skipping or weakening those execution checks.
+
+## Readonly MCP task queries
+
+After building, `npm run test:mcp:task-reads` runs both the Ticket/Plan and merged
+manual/execution Run suites against the actual Worker. `npm run test:mcp:task-runs`
+is the focused Run entrypoint. These checks run in default `npm test` and explicitly
+in hosted CI after the existing built-Worker identity check. See
+[MCP-TASK-READS.md](MCP-TASK-READS.md) for exact schemas, results and continuation.
+
+Fixtures use fresh isolated D1/all migrations and synthetic signed Access JWTs.
+Coverage includes exact stored types/filters, owner/root/nested isolation, canonical
+context-bound keysets, cross-source identical IDs, bounded nested pages, immutable
+frozen contracts, current registry/effective authorization, and safe version 1 and
+version 2 evidence plus failed/cancel/stop diagnostics. Synthetic domain preparation,
+approval and signed evidence ingestion do not dispatch or physically execute Tickets.
+Before/after snapshots include every persistent user table, including authorization
+audits, permits, attestations and auth revocations; rejected reads are also readonly.
+Malformed execution configuration only blocks presentation of a bound grant.

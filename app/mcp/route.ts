@@ -23,6 +23,7 @@ import {
   deliverJob,
 } from "../../lib/events";
 import { dispatchExecutionTool, executionTools } from "../../lib/execution/mcp.mts";
+import { dispatchTaskReadTool, taskReadTools } from "../../lib/task-reads/mcp.mts";
 import { ExecutionError } from "../../lib/execution/errors.mts";
 const object = (
   properties: Record<string, JsonSchema>,
@@ -188,7 +189,7 @@ export async function POST(req: Request) {
     if (method === "notifications/initialized")
       return new Response(null, { status: 202 });
     if (method === "ping") return respond({});
-    if (method === "tools/list") return respond({ tools: [...tools, ...executionTools] });
+    if (method === "tools/list") return respond({ tools: [...tools, ...executionTools, ...taskReadTools] });
     if (method === "events/list") return respond({ events: [eventDef] });
     const user = await getChatGPTUser();
     console.info(
@@ -333,6 +334,10 @@ export async function POST(req: Request) {
         id,
         error: { code: -32601, message: "Method not found" },
       });
+    const taskReadResult = await dispatchTaskReadTool(db, owner, p.name as string, p.arguments, () => configuredRegistry(env));
+    if (taskReadResult !== undefined) return respond({
+      content: [{ type: "text", text: JSON.stringify(taskReadResult) }], structuredContent: taskReadResult, isError: false,
+    });
     const executionResult = await dispatchExecutionTool(db, () => ({ owner, actor: owner, grantAuthority: "owner", registry: configuredRegistry(env) }), p.name as string, p.arguments);
     if (executionResult !== undefined) return respond({
       content: [{ type: "text", text: JSON.stringify(executionResult) }], structuredContent: executionResult, isError: false,
