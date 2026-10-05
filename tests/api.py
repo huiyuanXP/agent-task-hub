@@ -90,6 +90,10 @@ try:
     assert planjob['job']['delivery']=='no_subscription'
     changed=save({**idea,'id':idea_id,'revision':1,'title':'VM1 synthetic idea revision 2'},200)
     assert changed['revision']==2
+    automatic=rpc('list_planning_jobs',headers=AUTH)['jobs']
+    current=[job for job in automatic if job['idea_id']==idea_id and job['idea_revision']==2]
+    assert len(current)==1,('Saved idea revision must automatically enqueue exactly one job',current)
+    assert current[0]['status']=='queued' and current[0]['delivery']=='no_subscription',current
     save({**idea,'id':idea_id,'revision':1},409)
     records,_=request(DEV,'/api/records',headers=AUTH)
     history=[r for r in records['records'] if r['kind']=='history' and r['recordId']==idea_id]

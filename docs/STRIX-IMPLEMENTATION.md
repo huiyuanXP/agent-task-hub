@@ -89,3 +89,11 @@ lock adds only pinned JOSE 6.2.12 across this issue; all pre-existing package
 versions and the separate browser lock are preserved. No lint rule was weakened.
 Controller review, issue-specific push/PR and hosted CI remain the controller's
 responsibility; no deployment is part of this source change.
+
+## #9 — Automatic planning on Idea revision
+
+All successful Idea saves now atomically create history, the new revision and its deterministic revision-specific planning job. An early revision check prevents a mismatched history snapshot; the transaction retains its concurrent CAS. The job insert is gated by that save's unique history row and new Idea revision, so a losing request cannot create an orphan or overwrite another event. Delivery follows commit. Every saved context revision triggers planning; a stale duplicate gets 409. Prior Plan cards explicitly identify their source/current Idea revisions, and current result actions cannot open another revision's Plan.
+
+The pre-fix isolated API test observed no v2 job immediately after saving. After the fix it passes without a manual planning request. A browser regression failed on the missing stale Plan label before implementation and passed afterward. Actual signed-identity Worker/D1 checks passed correct event content, duplicate/history behavior, six racing edits with one winner/one history/one job, cross-owner/stale planner denial, and full revision/history rollback under an injected job-storage failure. Existing API/MCP and browser baseline passed; locks and authentication/Run/approval behavior are retained. Full final checks and review are recorded with this ticket's commit/PR evidence.
+
+#9 final review found a runtime project type gap. A shared Idea guard now rejects malformed/oversized project values before either create or update writes. Its actual Worker regression failed with 201 before the fix and passes with 400 plus unchanged records/history/jobs. Independent scoped re-review reports no remaining findings. Build, full npm test, lint and TypeScript passed; the validation fix was followed by a fresh build and Worker regression.

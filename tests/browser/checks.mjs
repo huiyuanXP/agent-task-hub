@@ -49,6 +49,17 @@ try {
 
   await page.getByRole('button', { name: '规划工作台', exact: false }).click();
   await page.getByRole('heading', { name: fixture.planTitle, exact: true }).waitFor();
+  await page.getByRole('button', { name: '点子收件箱', exact: false }).click();
+  await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).click();
+  const ideaDialog = page.getByRole('dialog');
+  await ideaDialog.getByRole('textbox', { name: '标题', exact: true }).fill(fixture.ideaTitle + ' revised');
+  const revisionSaved = page.waitForResponse(response => response.url() === dev + '/api/records' && response.request().method() === 'POST' && response.status() === 200);
+  await ideaDialog.getByRole('button', { name: '保存到云端', exact: true }).click();
+  await revisionSaved;
+  await page.getByRole('heading', { name: fixture.ideaTitle + ' revised', exact: true }).waitFor();
+  await page.getByRole('button', { name: '规划工作台', exact: false }).click();
+  await page.locator('article').filter({ has: page.getByRole('heading', { name: fixture.planTitle, exact: true }) }).getByText('已过期 · 点子 v1 / 当前 v2', { exact: true }).waitFor({ timeout: 3000 });
+  ok('Idea edit automatically queues current revision and labels superseded Plans');
   await page.getByRole('button', { name: 'Ticket 看板', exact: false }).click();
   await page.getByRole('heading', { name: fixture.ticketTitle, exact: true }).waitFor();
   await page.getByRole('button', { name: '执行记录', exact: false }).click();
