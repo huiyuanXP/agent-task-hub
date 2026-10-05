@@ -1,3 +1,4 @@
+import type { LocalDatabase } from './database.mts';
 import { database } from './store';
 import { deliverDue, discoverDeliveries, type DeliveryRow } from './planning-delivery';
 import type { JobRow, PlanningEvent, PlanningMetadata } from './types';
@@ -6,7 +7,7 @@ export type { PlanningMetadata } from './types';
 const currentIdea=`EXISTS(SELECT 1 FROM records i WHERE i.id=jobs.idea_id AND i.owner=jobs.owner AND i.kind='idea' AND i.revision=jobs.idea_revision)`;
 
 /** Read-only, owner-scoped and safe to attach to any authenticated job DTO. */
-export async function planningMetadata(job: JobRow, db: D1Database = database(), now=Date.now()): Promise<PlanningMetadata> {
+export async function planningMetadata(job: JobRow, db: LocalDatabase = database(), now=Date.now()): Promise<PlanningMetadata> {
   const {results}=await db.prepare('SELECT * FROM planning_deliveries WHERE job_id=? AND owner=? ORDER BY generation,id').bind(job.id,job.owner).all<DeliveryRow>();
   const idea=await db.prepare("SELECT revision FROM records WHERE id=? AND owner=? AND kind='idea'").bind(job.idea_id,job.owner).first<{revision:number}>();
   const current=idea?.revision===job.idea_revision;
@@ -21,7 +22,7 @@ export async function planningMetadata(job: JobRow, db: D1Database = database(),
     targets:targets.map(t=>({id:t.id,subscription_id:t.subscription_id,status:t.status,attempts:t.attempts,last_http_status:t.last_http_status,reason:t.terminal_reason,next_retry_at:t.next_attempt_at}))};
 }
 
-async function transition(db:D1Database, job:JobRow, manual:boolean) {
+async function transition(db:LocalDatabase, job:JobRow, manual:boolean) {
   const now=Date.now();
   const expired=job.status==='planning' && (job.lease??0)<=now;
   const reason=expired?'claim_expired':'consumer_unclaimed';
@@ -46,14 +47,14 @@ async function transition(db:D1Database, job:JobRow, manual:boolean) {
 }
 
 /** Returns the unchanged active/pending/done job or one CAS-reset generation. Caller authenticates first. */
-export async function retryPlanningJob(jobId:string, owner:string, db:D1Database=database()):Promise<JobRow|null> {
+export async function retryPlanningJob(jobId:string, owner:string, db:LocalDatabase=database()):Promise<JobRow|null> {
   const job=await db.prepare(`SELECT j.* FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner WHERE j.id=? AND j.owner=? AND i.kind='idea' AND i.revision=j.idea_revision`).bind(jobId,owner).first<JobRow>();
   if(!job) return null;
   await transition(db,job,true);
   return db.prepare('SELECT * FROM jobs WHERE id=? AND owner=?').bind(jobId,owner).first<JobRow>();
 }
 
-export async function recoverPlanningJobs(db:D1Database=database()) {
+export async function recoverPlanningJobs(db:LocalDatabase=database()) {
   const now=Date.now();
   const {results}=await db.prepare(`SELECT * FROM jobs WHERE ((status='planning' AND COALESCE(lease,0)<=?) OR (status='queued' AND wake_deadline<=?))
     AND ${currentIdea} ORDER BY COALESCE(lease,wake_deadline),id LIMIT 50`).bind(now,now).all<JobRow>();
@@ -82,11 +83,11 @@ export async function deliverJob(jobId:string, owner:string) {
   await discoverDeliveries(db,owner,jobId);
   await deliverDue(db,owner,jobId);
 }
-export async function backfillPlanning(owner:string, db:D1Database=database()) {
+export async function backfillPlanning(owner:string, db:LocalDatabase=database()) {
   await discoverDeliveries(db,owner);
   await deliverDue(db,owner);
 }
-export async function scheduledPlanning(db:D1Database=database()) {
+export async function scheduledPlanning(db:LocalDatabase=database()) {
   await recoverPlanningJobs(db);
   await discoverDeliveries(db);
   await deliverDue(db);

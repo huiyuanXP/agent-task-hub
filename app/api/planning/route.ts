@@ -1,11 +1,12 @@
+import { configuredOrigin } from '../../../lib/local-auth.mts';
 import type { RecordRow, RecordBody, JobRow } from "../../../lib/types";
 import { visibleJob, visibleJobs } from "../../../lib/planning-state";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getCurrentUser } from "../../../lib/current-user";
 import { database } from "../../../lib/store";
 import { deliverJob, EVENT } from "../../../lib/events";
 import { retryPlanningJob } from "../../../lib/planning-recovery";
 export async function GET() {
-  const user = await getChatGPTUser();
+  const user = await getCurrentUser();
   if (!user) return Response.json({ error: "请登录" }, { status: 401 });
   try {
     const db = database();
@@ -29,9 +30,9 @@ export async function GET() {
   }
 }
 export async function POST(req: Request) {
-  const user = await getChatGPTUser();
+  const user = await getCurrentUser();
   if (!user) return Response.json({ error: "请登录" }, { status: 401 });
-  if (req.headers.get("origin") !== new URL(req.url).origin)
+  if (req.headers.get("origin") !== configuredOrigin())
     return Response.json({ error: "请求来源无效" }, { status: 403 });
   try {
     let input: unknown;

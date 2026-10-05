@@ -1,4 +1,6 @@
-import { env } from "cloudflare:workers";
+import { configuredOrigin } from '../../lib/local-auth.mts';
+import { executionEnvironment } from '../../lib/runtime-environment';
+const env = executionEnvironment();
 import { configuredRegistry } from '../../lib/execution/backend-config.mts';
 import { backfillPlanning } from "../../lib/planning-recovery";
 import type {
@@ -12,7 +14,7 @@ import type {
   PlannerTicket,
 } from "../../lib/types";
 import { ideaWithPlanning, visibleJobs } from "../../lib/planning-state";
-import { getChatGPTUser } from "../chatgpt-auth";
+import { getCurrentUser } from "../../lib/current-user";
 import { database } from "../../lib/store";
 import {
   EVENT,
@@ -151,7 +153,7 @@ function same(a: string, b: string) {
 export async function POST(req: Request) {
   let id: string | number | null = null;
   try {
-    if (req.headers.has("origin") && req.headers.get("origin") !== new URL(req.url).origin)
+    if (req.headers.has("origin") && req.headers.get("origin") !== configuredOrigin())
       return Response.json({ error: "Invalid request origin" }, { status: 403 });
     const rpc = (await req.json()) as RpcRequest;
     id = rpc.id ?? null;
@@ -191,7 +193,7 @@ export async function POST(req: Request) {
     if (method === "ping") return respond({});
     if (method === "tools/list") return respond({ tools: [...tools, ...executionTools, ...taskReadTools] });
     if (method === "events/list") return respond({ events: [eventDef] });
-    const user = await getChatGPTUser();
+    const user = await getCurrentUser();
     console.info(
       JSON.stringify({
         component: "mcp",
@@ -420,7 +422,7 @@ export async function POST(req: Request) {
     } else if (p.name === "get_idea") {
       const row = await db
         .prepare("SELECT * FROM records WHERE id=? AND owner=? AND kind=?")
-        .bind(a.idea_id, owner, "idea")
+        .bind(a.idea_id ?? null, owner, "idea")
         .first<RecordRow>();
       if (!row) throw Error("Idea not found");
       result = await ideaWithPlanning(row, owner);
@@ -430,13 +432,13 @@ export async function POST(req: Request) {
         .prepare(
           "UPDATE jobs SET status='planning',claim_token=?,lease=? WHERE id=? AND owner=? AND (status='queued' OR (status='planning' AND lease<=?)) AND EXISTS(SELECT 1 FROM records i WHERE i.id=jobs.idea_id AND i.owner=jobs.owner AND i.revision=jobs.idea_revision)",
         )
-        .bind(token, claimNow + 600000, a.job_id, owner, claimNow)
+        .bind(token, claimNow + 600000, a.job_id ?? null, owner, claimNow)
         .run();
       if (!changed.meta.changes)
         throw Error("Job completed or claimed; inspect jobs before retrying");
       const job = await db
         .prepare("SELECT * FROM jobs WHERE id=? AND owner=?")
-        .bind(a.job_id, owner)
+        .bind(a.job_id ?? null, owner)
         .first<JobRow>();
       if (!job) throw Error("Job not found");
       const idea = await db
@@ -460,7 +462,7 @@ export async function POST(req: Request) {
     } else if (p.name === "save_plan_and_tickets") {
       const job = await db
         .prepare("SELECT * FROM jobs WHERE id=? AND owner=?")
-        .bind(a.job_id, owner)
+        .bind(a.job_id ?? null, owner)
         .first<JobRow>();
       if (!job) throw Error("Job not found");
       if (job.status === "done") {
@@ -564,7 +566,7 @@ export async function POST(req: Request) {
               now,
               job.id,
               owner,
-              a.claim_token,
+              a.claim_token ?? null,
               saveNow,
             ),
         );
@@ -577,7 +579,7 @@ export async function POST(req: Request) {
               JSON.stringify(output),
               job.id,
               owner,
-              a.claim_token,
+              a.claim_token ?? null,
               saveNow,
               idea.id,
               job.idea_revision,

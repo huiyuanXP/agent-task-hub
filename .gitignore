@@ -1,10 +1,7 @@
 node_modules/
 dist/
 .next/
-.vinext/
 out/
-.wrangler/
-.sites-runtime/
 *.tsbuildinfo
 next-env.d.ts
 .env
@@ -27,3 +24,4 @@ npm-debug.log*
 .worktrees/
 .superpowers/
 test-results/
+.local/

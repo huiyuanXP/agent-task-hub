@@ -1,3 +1,4 @@
+import type { LocalDatabase } from './database.mts';
 import { CallbackError, signedPost } from './event-transport';
 import type { JobRow, PlanningEvent, Subscription } from './types';
 
@@ -16,7 +17,7 @@ const activeTarget = `EXISTS(SELECT 1 FROM subscriptions s JOIN jobs j ON j.id=p
  WHERE s.id=planning_deliveries.subscription_id AND s.owner=planning_deliveries.owner AND s.expires>?
  AND (COALESCE(json_extract(s.body,'$.args.project'),'')='' OR json_extract(s.body,'$.args.project')=json_extract(j.event,'$.data.project')))`;
 
-export async function discoverDeliveries(db: D1Database, owner?: string, jobId?: string) {
+export async function discoverDeliveries(db: LocalDatabase, owner?: string, jobId?: string) {
   const now = Date.now();
   const { results } = await db.prepare(`SELECT j.* FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner
     WHERE j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.kind='idea' AND i.revision=j.idea_revision
@@ -39,7 +40,7 @@ export async function discoverDeliveries(db: D1Database, owner?: string, jobId?:
   }
 }
 
-export async function refreshDeliverySummary(db: D1Database, jobId: string, owner: string) {
+export async function refreshDeliverySummary(db: LocalDatabase, jobId: string, owner: string) {
   // Compute inside a single statement so an old delivery cannot overwrite a new generation's summary.
   await db.prepare(`UPDATE jobs SET delivery=CASE
     WHEN recovery_reason='recovery_exhausted' THEN 'failed'
@@ -51,7 +52,7 @@ export async function refreshDeliverySummary(db: D1Database, jobId: string, owne
     ELSE 'failed' END WHERE id=? AND owner=? AND status='queued'`).bind(jobId,owner).run();
 }
 
-export async function deliverDue(db: D1Database, owner?: string, jobId?: string) {
+export async function deliverDue(db: LocalDatabase, owner?: string, jobId?: string) {
   const now=Date.now();
   // One shared cleanup budget covers both reasons. Stopped rows leave the
   // candidate set, so the next tick continues in updated_at/id order. Delivery
@@ -79,7 +80,7 @@ export async function deliverDue(db: D1Database, owner?: string, jobId?: string)
   await Promise.all(results.map(row=>attemptDelivery(db,row)));
 }
 
-async function attemptDelivery(db: D1Database, row: DeliveryRow) {
+async function attemptDelivery(db: LocalDatabase, row: DeliveryRow) {
   const now=Date.now(), token=crypto.randomUUID();
   if(row.attempts>=5) {
     await db.prepare(`UPDATE planning_deliveries SET status='failed',terminal_reason='attempts_exhausted',delivery_token=NULL,delivery_lease=NULL,next_attempt_at=NULL,updated_at=? WHERE id=? AND ((status='delivering' AND delivery_lease<=?) OR (status IN ('pending','retrying') AND next_attempt_at<=?)) AND attempts>=5 AND ${currentQueued} AND ${activeTarget}`)

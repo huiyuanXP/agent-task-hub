@@ -558,9 +558,7 @@ export default function Home() {
               <>
                 <span aria-label="当前账户">
                   <span>{session.user.displayName}</span>
-                  {session.mode === "development" && (
-                    <small> · 本地开发身份</small>
-                  )}
+                  <small> · 本地账户</small>
                 </span>
                 <span className="avatar small" aria-label="账户缩写">
                   {session.user.displayName
@@ -571,12 +569,12 @@ export default function Home() {
                     .join("")
                     .toUpperCase()}
                 </span>
-                <form method="post" action="/signout-with-chatgpt">
+                <form method="post" action="/api/auth/logout">
                   <button type="submit">退出登录</button>
                 </form>
               </>
             ) : (
-              !loading && <a href="/signin-with-chatgpt?return_to=%2F">登录</a>
+              !loading && <a href="/signin?return_to=%2F">登录</a>
             )}
           </div>
         </header>

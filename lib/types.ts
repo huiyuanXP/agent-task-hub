@@ -174,7 +174,7 @@ export interface JsonSchema {
 
 // Safe session DTO; display data never grants execution authority.
 export interface SessionState {
-  user: { userId: string; displayName: string; email: string; fullName: string | null };
-  mode: "access" | "trusted-sites" | "development";
+  user: { userId: string; displayName: string; username: string };
+  mode: "local";
   expiresAt: number | null;
 }

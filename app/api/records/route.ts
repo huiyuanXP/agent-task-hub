@@ -1,13 +1,14 @@
+import { configuredOrigin } from '../../../lib/local-auth.mts';
 import type { RecordRow, RecordBody, RecordDraft } from "../../../lib/types";
 import { ideaWithPlanning } from "../../../lib/planning-state";
 import { deliverJob, EVENT } from "../../../lib/events";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getCurrentUser } from "../../../lib/current-user";
 import { database } from "../../../lib/store";
 const kinds = ["idea", "plan", "ticket", "run"];
 const states = ["todo", "running", "waiting", "done", "error"];
 export async function GET() {
   try {
-    const user = await getChatGPTUser();
+    const user = await getCurrentUser();
     if (!user)
       return Response.json({ error: "请重新登录后重试" }, { status: 401 });
     const { results } = await database()
@@ -37,18 +38,18 @@ export async function GET() {
   } catch (e) {
     console.error(e);
     return Response.json(
-      { error: "暂时无法读取云端数据，请重试" },
+      { error: "暂时无法读取本地数据，请重试" },
       { status: 503 },
     );
   }
 }
 export async function POST(req: Request) {
   try {
-    const user = await getChatGPTUser();
+    const user = await getCurrentUser();
     if (!user)
       return Response.json({ error: "请重新登录后重试" }, { status: 401 });
     const origin = req.headers.get("origin");
-    if (origin !== new URL(req.url).origin)
+    if (origin !== configuredOrigin())
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     const payload = (await req.json()) as RecordDraft;
     const { id, kind, revision, ...body } = payload;
@@ -198,7 +199,7 @@ export async function POST(req: Request) {
         .prepare(
           "SELECT body,revision FROM records WHERE id=? AND owner=? AND kind=?",
         )
-        .bind(body.ticketId, user.userId, "ticket")
+        .bind(body.ticketId ?? null, user.userId, "ticket")
         .first<Pick<RecordRow, "body" | "revision">>();
       if (!ticket)
         return Response.json({ error: "关联 Ticket 不存在" }, { status: 400 });
