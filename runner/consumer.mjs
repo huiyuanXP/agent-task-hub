@@ -122,7 +122,16 @@ async function runtime(journal, options) {
         catch (error) {
             if (error.code !== 'WORKER_AUTHORITY_EXPIRED')
                 throw error;
-            await claim(observed.permit ? 'reconcile' : 'execute', true);
+            const saved = currentLease();
+            if (observed.permit && saved?.generation && saved.expiresAt > Date.now()) {
+                // A denied execute-claim replay does not revoke this lease's
+                // completion/stop authority. Keep its secret and pending actions;
+                // the bounded loop below reclaims only after its actual expiry.
+                renewFailure = error;
+            }
+            else {
+                await claim(observed.permit ? 'reconcile' : 'execute', true);
+            }
         }
         renewTask = (async () => {
             while (!done) {

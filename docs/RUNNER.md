@@ -372,6 +372,9 @@ All start/renew/report/complete/cancel request IDs are saved before writes.
 It reconciles signed backend results rather than asserting success. A restarted
 runtime with a persisted physical permit uses a fresh reconciliation generation
 after lease expiry, retaining the same backend identity and original deadline.
+If restart encounters grant or selected-registry invalidation while its saved
+lease is still live, it preserves that lease and its pending action IDs for
+trusted completion/owned stop, then reclaims only when the lease expires.
 Reconciliation leases are not renewable. A credential's expiry or revocation
 stops privileged calls and requires a new explicit owner bootstrap.
 
