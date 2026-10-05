@@ -164,3 +164,16 @@ The combined suites are included in default testing and explicit hosted CI.
 RED/GREEN and final validation evidence is retained in ignored
 `.superpowers/sdd/2026-10-05-mcp-task-reads/`. Mandatory full hosted Docker acceptance
 is preserved; local absence of that prerequisite is disclosed in the task report.
+
+## #11 final review and controller verification
+
+Task reviews and scoped fixes plus the complete independent source review approve all five readonly tools with no Critical or Important findings. Stored JSON text guards and strict numeric authorization expiry are covered by actual Worker RED/GREEN regressions. The controller fast-forwarded the primary checkout, then completed a fresh build, combined Ticket/Plan/Run checks, malformed execution-registry isolation, lint and TypeScript with exit 0. Both locks are unchanged. Full hosted Docker/backend acceptance remains required before this issue is merged. The local full npm attempt stopped at missing Docker prerequisites and was terminated with exit 143; it was not a completed passing suite.
+
+Implementation decisions made under the user’s authorization to proceed autonomously:
+
+- Use owner-scoped D1 keyset queries rather than proxying full records API — bounded pagination and exact nested privacy need explicit queries — if wrong, maintain a new query module instead of one reused transport.
+- Cursors are unsigned context-bound positions with mandatory SQL owner predicates — they carry no authority and signing would require new secret management — if wrong, owners can forge positions within their own authorized data, never cross-owner access.
+- Manual snapshots use state snapshot and preserve their reported status/evidence separately — a user-reported done value must not imply verified execution — if wrong, clients adapt to an explicit source/state distinction instead of one shared status enum.
+- Missing/unowned/mismatched linked authorization is null while the owned Run stays readable — relationship corruption must not reveal another grant or erase unrelated owned evidence — if wrong, clients cannot distinguish an absent grant from an invalid binding through this compact read interface; authoritative grant tool remains separately owner-scoped. Task2spec/planclarified; Task1scopeunchanged.
+- Resolve current trusted registry lazily only when a bound authorization is presented, and fail CONFIGURATION_UNAVAILABLE503 on malformed configuration instead of silently using defaults — current operation definitions determine effective grant status — if wrong, bound-grant pages are unavailable during bad registry config, while unrelated reads remain usable.
+- Include safe v2 result/cancel/stop diagnostics from owner/run/ticket-bound immutable backend evidence, alongside v1 receipts and manual snapshots — current main stores failure evidence outside execution_runs.evidence — if wrong, the Run query maintains one extra readonly join, but no dispatch/permit/signature data is exposed.
