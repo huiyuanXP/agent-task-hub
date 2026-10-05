@@ -221,11 +221,17 @@ try {
   const backlogAddress='https://chatgpt.com/backlog'; callbacks[backlogAddress]={secret,events:[]};
   await subscribe(backlogAddress,'Backlog');
   let prior=callbacks[backlogAddress].events.length;
+  assert.ok(prior<=20,'Subscription backfill outbound respects twenty-target cap');
+  const discovered=async()=> (await rows("SELECT DISTINCT job_id FROM planning_deliveries WHERE subscription_id IN (SELECT id FROM subscriptions WHERE json_extract(body,'$.args.project')='Backlog')")).length;
+  let priorDiscovered=await discovered();
+  assert.ok(priorDiscovered<=50,'Subscription backfill discovers at most fifty jobs');
   for(let tick=0;tick<10 && prior<53;tick++) {
     await f.scheduled();
     const delivered=callbacks[backlogAddress].events.length;
     assert.ok(delivered-prior<=20,'Scheduled outbound respects twenty-target cap');
-    if(tick===0) assert.ok((await rows("SELECT DISTINCT job_id FROM planning_deliveries WHERE subscription_id IN (SELECT id FROM subscriptions WHERE json_extract(body,'$.args.project')='Backlog')")).length<=50,'Backfill discovers at most fifty jobs');
+    const count=await discovered();
+    assert.ok(count-priorDiscovered<=50,'Each scheduled invocation discovers at most fifty jobs');
+    priorDiscovered=count;
     prior=delivered;
   }
   assert.equal(prior,53,'Bounded scans eventually drain persisted backlog without starvation');

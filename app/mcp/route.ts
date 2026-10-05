@@ -1,3 +1,4 @@
+import { backfillPlanning } from "../../lib/planning-recovery";
 import type {
   JsonSchema,
   RpcRequest,
@@ -212,9 +213,15 @@ export async function POST(req: Request) {
       if (
         p.name !== EVENT ||
         p.delivery?.mode !== "webhook" ||
+        typeof p.delivery.url !== "string" ||
+        (method === "events/subscribe" && typeof p.delivery.secret !== "string") ||
+        (p.arguments !== undefined &&
+          (!p.arguments || typeof p.arguments !== "object" || Array.isArray(p.arguments))) ||
+        (p.ttlMs !== undefined &&
+          (typeof p.ttlMs !== "number" || !Number.isFinite(p.ttlMs))) ||
         Object.keys(p.arguments || {}).some((k) => k !== "project") ||
         (p.arguments?.project !== undefined &&
-          typeof p.arguments.project !== "string")
+          (typeof p.arguments.project !== "string" || p.arguments.project.length > 120))
       )
         throw Error("Invalid event subscription");
       console.info(
@@ -231,6 +238,7 @@ export async function POST(req: Request) {
           .prepare("DELETE FROM subscriptions WHERE id=? AND owner=?")
           .bind(sid, owner)
           .run();
+        await backfillPlanning(owner, db);
         return respond({});
       }
       secretBytes(p.delivery.secret);
@@ -309,6 +317,7 @@ export async function POST(req: Request) {
       console.info(
         JSON.stringify({ component: "events", stage: "subscription_saved" }),
       );
+      await backfillPlanning(owner, db);
       return respond({
         id: sid,
         refreshBefore: new Date(expires).toISOString(),

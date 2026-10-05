@@ -1,16 +1,9 @@
 import { database } from './store';
 import { deliverDue, discoverDeliveries, type DeliveryRow } from './planning-delivery';
-import type { JobRow, PlanningEvent } from './types';
+import type { JobRow, PlanningEvent, PlanningMetadata } from './types';
+export type { PlanningMetadata } from './types';
 
 const currentIdea=`EXISTS(SELECT 1 FROM records i WHERE i.id=jobs.idea_id AND i.owner=jobs.owner AND i.kind='idea' AND i.revision=jobs.idea_revision)`;
-
-export interface PlanningMetadata {
-  status: string; lease_expires: number | null; retry_allowed: boolean;
-  generation: number; recoveries: number; recovery_reason: string | null;
-  attempt_total: number; next_retry_at: number | null; wake_deadline: number | null;
-  retry_after: number | null; delivery: string;
-  targets: {id:string;subscription_id:string;status:string;attempts:number;last_http_status:number|null;reason:string|null;next_retry_at:number|null}[];
-}
 
 /** Read-only, owner-scoped and safe to attach to any authenticated job DTO. */
 export async function planningMetadata(job: JobRow, db: D1Database = database(), now=Date.now()): Promise<PlanningMetadata> {

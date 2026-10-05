@@ -6,6 +6,7 @@ export interface RecordBody {
   priority?: string;
   status?: string;
   planningStatus?: string;
+  planning?: PlanningMetadata | null;
   planningDelivery?: string | null;
   goal?: string;
   scope?: string;
@@ -81,16 +82,30 @@ export interface JobRow {
   result: string | null;
   created: string;
 }
-export type VisibleJob = Pick<
-  JobRow,
-  | "id"
-  | "idea_id"
-  | "idea_revision"
-  | "status"
-  | "delivery"
-  | "created"
-  | "result"
-> & { current_revision: number };
+export interface PlanningMetadata {
+  status: string;
+  lease_expires: number | null;
+  retry_allowed: boolean;
+  generation: number;
+  recoveries: number;
+  recovery_reason: string | null;
+  attempt_total: number;
+  next_retry_at: number | null;
+  wake_deadline: number | null;
+  retry_after: number | null;
+  delivery: string;
+  targets: {
+    id: string;
+    subscription_id: string;
+    status: string;
+    attempts: number;
+    last_http_status: number | null;
+    reason: string | null;
+    next_retry_at: number | null;
+  }[];
+}
+export type VisibleJob = Pick<JobRow, "id" | "idea_id" | "idea_revision" | "created" | "result"> &
+  PlanningMetadata & { current_revision: number };
 export interface PlanningState {
   jobs: VisibleJob[];
   subscriptions: number;

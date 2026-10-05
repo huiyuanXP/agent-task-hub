@@ -99,3 +99,31 @@ The pre-fix isolated API test observed no v2 job immediately after saving. After
 #9 final review found a runtime project type gap. A shared Idea guard now rejects malformed/oversized project values before either create or update writes. Its actual Worker regression failed with 201 before the fix and passes with 400 plus unchanged records/history/jobs. Independent scoped re-review reports no remaining findings. Build, full npm test, lint and TypeScript passed; the validation fix was followed by a fresh build and Worker regression.
 
 The final #9 branch also retains upstream PR #33 isolated workspace functionality and adds the revision Worker check to explicit hosted CI. Local whole-suite verification after that merge encountered only the absent Docker daemon/socket required by upstream execution workspace tests (34 failures, 81 execution checks passed); no tests were skipped or weakened. Application auth/planning/browser/integration checks are run separately here, while hosted Ubuntu CI provides the required full Docker acceptance before merging this ticket.
+
+## #10 — Durable planning recovery
+
+Planning callback delivery now persists owner/job/subscription/generation target
+state in D1 and recovers through the built Worker's minute cron. Signed callbacks
+use token-guarded delivery leases, bounded attempts/backoff and stable event IDs.
+Expired planner claims and unclaimed accepted events recover with exact revision
+CAS and bounded automatic generations. Verified subscribe/refresh immediately
+backfills; unsubscribe records safe inactive-target reasons. The authenticated
+same-origin manual endpoint validates its runtime input, guards initial insertion
+against Idea edits, preserves active/done/pending state and applies a one-generation
+CAS retry with a sixty-second cooldown.
+
+Explicit API/MCP job DTOs and Idea `planning` metadata expose authoritative lease,
+retry, generation, attempt and sanitized failure state without internal job tokens,
+event bodies or subscription secrets. The inbox shows lease countdown/expiry,
+backoff, cooldown and failure reason, with an eligible recovery action. Existing
+account/version/expiry guards, Ticket approval and Run/runner behavior remain intact.
+
+Actual fresh-D1 Worker and loopback Chromium regressions were observed RED before
+route/UI implementation. The recovery, lifecycle and browser suites are included
+in default npm testing and hosted CI; [PLANNING.md](PLANNING.md) describes operator
+bounds, migration and at-least-once contracts. Detailed command evidence and final
+validation are retained in ignored `.superpowers/sdd/2026-10-05-planning-recovery/`.
+Both dependency locks are preserved. Full local Docker acceptance remains dependent
+on the upstream backend prerequisites; hosted CI retains all mandatory checks.
+No deployment, production data migration, live callback registration, Ticket
+execution, issue-specific push or PR is part of this implementation task.

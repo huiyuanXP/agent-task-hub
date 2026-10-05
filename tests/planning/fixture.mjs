@@ -25,6 +25,7 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
     const pauseGates = new Map();
     const files = await readdir('dist/server', { recursive: true });
     const options = { host: '127.0.0.1', port: 0, modulesRoot: 'dist/server',
+      assets: { directory: 'dist/client', binding: 'ASSETS', routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: false } },
       modules: [config.main, ...files.filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
       compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags,
       bindings: { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUDIENCE: audience, ACCESS_APPLICATION_ORIGIN: origin, ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]' },
@@ -108,9 +109,12 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
       const sql = await readFile(join('drizzle', name), 'utf8');
       for (const statement of sql.split('--> statement-breakpoint').filter(statement => statement.trim())) await db.prepare(statement).run();
     }
-    const request = async (path, body, actor = 'alice') => {
+    const dispatch = (path, init = {}, actor = 'alice') => worker.dispatchFetch(origin + path, {
+      ...init, headers: { authorization: 'Bearer ' + tokens[actor], ...Object.fromEntries(new Headers(init.headers)) }, redirect: 'manual',
+    });
+    const request = async (path, body, actor = 'alice', headers = {}) => {
       const response = await worker.dispatchFetch(origin + path, { method: body === undefined ? 'GET' : 'POST',
-        headers: { authorization: 'Bearer ' + tokens[actor], origin, 'content-type': 'application/json' },
+        headers: { authorization: 'Bearer ' + tokens[actor], origin, 'content-type': 'application/json', ...headers },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'manual' });
       return { status: response.status, body: await response.json() };
     };
@@ -131,7 +135,7 @@ export async function planningFixture({ callbacks = {}, engineHarness = false } 
         const response = await helper.fetch('https://fixture.internal/', { method: 'POST', body: JSON.stringify({ operation, id, owner }) });
         return await response.json();
       } finally { if (operation === 'delayed-due') pauseGates.delete(id); }
-    }, get db() { return db; }, request, rpc, scheduled: async () => { assert.deepEqual(config.triggers.crons, ['*/1 * * * *']); const entry = await worker.getWorker(engineCode ? 'app' : undefined); return entry.scheduled({ cron: config.triggers.crons[0], scheduledTime: Date.now() }); }, restart: async () => { await worker.dispose(); worker = launch(); await worker.ready; db = await worker.getD1Database('DB', engineCode ? 'app' : undefined); }, close: async () => { await worker.dispose(); await rm(directory, { recursive: true, force: true }); assert.deepEqual(unexpected, [], 'Unexpected outbound requests'); } };
+    }, get db() { return db; }, origin, dispatch, request, rpc, scheduled: async () => { assert.deepEqual(config.triggers.crons, ['*/1 * * * *']); const entry = await worker.getWorker(engineCode ? 'app' : undefined); return entry.scheduled({ cron: config.triggers.crons[0], scheduledTime: Date.now() }); }, restart: async () => { await worker.dispose(); worker = launch(); await worker.ready; db = await worker.getD1Database('DB', engineCode ? 'app' : undefined); }, close: async () => { await worker.dispose(); await rm(directory, { recursive: true, force: true }); assert.deepEqual(unexpected, [], 'Unexpected outbound requests'); } };
   } catch (error) {
     await worker?.dispose(); await rm(directory, { recursive: true, force: true }); throw error;
   }
