@@ -17,6 +17,7 @@ function command(executable, args, options = {}) {
     child.stderr.on('data', data => { stderr += data; });
     child.once('error', reject);
     child.once('close', code => accept({ code, stdout, stderr }));
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
     child.stdin.end(options.input ?? '');
   });
 }

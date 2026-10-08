@@ -6,7 +6,7 @@ export interface ConnectorPrincipal { id:string; owner:string; projectId:string;
 interface ConnectionRow {
  id:string; owner:string; project_id:string; project:string; name:string; workspace:string; version:string;
  capabilities:string; token_expires_at:number; created_at:number; last_seen:number|null; mcp_last_seen:number|null;
- agent_last_seen:number|null; agent_ready:number; agent_error:string|null; revoked_at:number|null;
+ agent_last_seen:number|null; agent_ready:number; agent_error:string|null; revoked_at:number|null; runtime_json:string|null;
 }
 export const connectorCapabilities = ['read','submit','plan','execute'] as const;
 const hash = (value:string) => createHash('sha256').update(value).digest('hex');
@@ -28,7 +28,7 @@ export function connectionDTO(row:ConnectionRow, now=Date.now()) {
  const elapsed=now-(row.agent_last_seen??0);
  const status=row.revoked_at!==null?'revoked':row.token_expires_at<=now?'expired':row.agent_last_seen===null?'installed':elapsed<45000?'online':elapsed<90000?'delayed':'offline';
  return {id:row.id,name:row.name,workspace:row.workspace,projectId:row.project_id,project:row.project,version:row.version,status,lastSeen:row.last_seen,mcpLastSeen:row.mcp_last_seen,agentLastSeen:row.agent_last_seen,createdAt:row.created_at,expiresAt:row.token_expires_at,
-  agentReady:row.agent_ready===1,agentError:row.agent_error,capabilities:JSON.parse(row.capabilities) as string[],revokedAt:row.revoked_at};
+  agentReady:row.agent_ready===1,agentError:row.agent_error,runtime:row.runtime_json?JSON.parse(row.runtime_json):null,capabilities:JSON.parse(row.capabilities) as string[],revokedAt:row.revoked_at};
 }
 export async function ensureProject(db:LocalDatabase, owner:string, name:string) {
  await db.prepare('INSERT OR IGNORE INTO workspace_projects(id,owner,name,created_at) VALUES(?,?,?,?)').bind(randomUUID(),owner,name,Date.now()).run();
@@ -92,13 +92,26 @@ export async function authenticateConnector(db:LocalDatabase,headers:Headers):Pr
  return {id:row.id,owner:row.owner,projectId:row.project_id,project:row.project,capabilities:JSON.parse(row.capabilities) as string[]};
 }
 export async function heartbeatConnector(db:LocalDatabase,principal:ConnectorPrincipal,input:unknown) {
- connectorInput(input,['mode','version','agentReady','error']);
+ connectorInput(input,['mode','version','agentReady','error','runtime']);
  if(!['mcp','agent'].includes(input.mode as string) || typeof input.agentReady!=='boolean')throw new AuthError(400,'Invalid heartbeat');
  const version=connectorText(input.version,80,'version'),error=sanitizedConnectorError(input.error),now=Date.now();
+ let runtime:string|null=null;
+ if(input.runtime!==undefined){
+  connectorInput(input.runtime,['profile','model','provider']);
+  const safe:Record<string,string|null>={};
+  for(const field of ['profile','model','provider']){
+   const value=input.runtime[field];
+   if(value===undefined||value===null){safe[field]=null;continue;}
+   if(typeof value!=='string'||value.length>120||!(/^[A-Za-z0-9._:/-]+$/).test(value)||/^sk-/i.test(value))throw new AuthError(400,'Invalid runtime metadata');
+   if(field==='profile'&&!(/^[A-Za-z0-9_-]+$/).test(value))throw new AuthError(400,'Invalid profile');
+   safe[field]=value;
+  }
+  runtime=JSON.stringify(safe);
+ }
  const agent=input.mode==='agent';
  const results=await db.batch([
-  db.prepare(`UPDATE workspace_connections SET version=?,last_seen=?,${agent?'agent_last_seen=?,agent_ready=?,agent_error=?':'mcp_last_seen=?'} WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?`)
-   .bind(version,now,...(agent?[now,input.agentReady&&!error?1:0,error]:[now]),principal.id,principal.owner,now),
+  db.prepare(`UPDATE workspace_connections SET version=?,last_seen=?,runtime_json=COALESCE(?,runtime_json),${agent?'agent_last_seen=?,agent_ready=?,agent_error=?':'mcp_last_seen=?'} WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?`)
+   .bind(version,now,runtime,...(agent?[now,input.agentReady&&!error?1:0,error]:[now]),principal.id,principal.owner,now),
   db.prepare(`INSERT INTO workspace_connection_events(id,connection_id,owner,mode,message,created_at) SELECT ?,id,owner,?,?,? FROM workspace_connections WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?`)
    .bind(randomUUID(),agent?'agent':'mcp',error,now,principal.id,principal.owner,now),
   db.prepare('DELETE FROM workspace_connection_events WHERE connection_id=? AND id NOT IN (SELECT id FROM workspace_connection_events WHERE connection_id=? ORDER BY created_at DESC,id DESC LIMIT 100)').bind(principal.id,principal.id),

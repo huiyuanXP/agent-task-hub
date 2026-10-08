@@ -23,3 +23,16 @@ MCP 使用 STDIO JSON-RPC；stdout 仅传输协议，日志写 stderr。其他 M
 服务地址变化用 set-url --url 更新；卸载使用 uninstall。卸载本机配置与网页撤销身份是两个操作，网页撤销立即禁止后续工具调用和续租。保留连接历史。
 
 工坊自己的仓库也可用相同方式关联为一个 workspace；项目绑定名必须与点子/Ticket 的项目一致。不要把没有关联仓库的普通项目当成已经具备开发执行能力。
+
+## 本机 Codex 配置与 Profile
+
+客户端默认继承本机 Codex 的默认模型、provider 和认证配置，不要求已有 API 网关用户重新 Device 登录。使用 --profile mimo 或 --profile oneapi 可以选择本机已有的配置文件；具体名称及模型以安装机器的实际配置为准。
+
+```sh
+node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs agent --workspace /absolute/project --profile mimo
+node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs doctor --workspace /absolute/project
+```
+
+显式选项保存在本机客户端配置，不复制模型凭据。--profile default 恢复默认 Profile；省略 --model 和 --reasoning 时沿用 Codex 配置。后台连接记录显示所选 Profile、模型和 provider，实际调用失败时显示真实错误。
+
+使用官方账户认证方式且本机尚未登录时，仍可自行 codex login；已有 Profile 的 API 认证由本机 Codex 处理。独立于 CLI 的直接 API Call 适配器另有后续 Ticket，尚未实现。

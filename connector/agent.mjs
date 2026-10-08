@@ -4,15 +4,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { command, git, heartbeat, privateDirectory, privateJson, redact, request, tool } from './common.mjs';
 import { processIdentity, runCodex, runnerInvocation, stopRecoveredProcess } from './runner.mjs';
 import { developmentSchema, planningSchema, validatePlanning } from './schemas.mjs';
+import { codexMetadata, selectedCodexOptions } from './codex-config.mjs';
 
-export async function codexReadiness(options = {}) {
+export async function codexReadiness(options = {}, workspace = process.cwd(), config) {
+  const metadata = await codexMetadata(options, workspace);
+  if (config) {
+    config.runtimeSelection = { profile: options.profile && options.profile !== 'default' ? options.profile : null, model: metadata.model || null, provider: metadata.provider || null };
+    Object.defineProperty(config, 'runtimeSecrets', { value: metadata.secrets, writable: true, configurable: true });
+  }
+  const synthetic = options['test-runner'] ? { error: 'Synthetic test runner; this is not real model evidence' } : {};
+  if (metadata.customProvider && (metadata.configuredCredentials || metadata.credentialFree)) return { ready: true, authMode: 'configured', ...synthetic };
+  if (!metadata.customProvider && metadata.configuredCredentials) return { ready: true, authMode: metadata.persistedAuth ? 'persisted' : 'environment', ...synthetic };
+  if (metadata.customProvider && !metadata.requiresOpenaiAuth) return { ready: false, error: 'Codex provider authentication is missing; configure its credentials on this machine' };
   const invocation = runnerInvocation(options, ['login', 'status']);
   try {
-    const environment = { ...process.env };
-    delete environment.OPENAI_API_KEY; delete environment.CODEX_API_KEY;
-    const result = await command(invocation.executable, invocation.args, { env: environment });
-    if (result.code === 0) return { ready: true, authMode: 'persisted', ...(options['test-runner'] ? { error: 'Synthetic test runner; this is not real model evidence' } : {}) };
-    if (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY) return { ready: false, probeRequired: true, error: 'Inherited API credentials require a real Codex authentication probe' };
+    const result = await command(invocation.executable, invocation.args, { cwd: workspace });
+    if (result.code === 0) return { ready: true, authMode: 'persisted', ...synthetic };
     return { ready: false, error: 'Codex is not logged in; run codex login on this machine' };
   } catch (error) { return { ready: false, error: error.code === 'ENOENT' ? 'Codex CLI is missing; install it and run codex login' : 'Codex authentication check failed' }; }
 }
@@ -110,9 +117,13 @@ async function development(config, options, job, parentSignal, journalFile) {
     await event('checking', 'Collecting actual Git diff and completed test command evidence');
     const changes = await evidence(worktree);
     if (!changes.diff.trim() || !changes.files.length) throw Error('Agent produced no actual code changes');
-    if (!output.tests.length || output.tests.some(receipt => receipt.exitCode !== 0)) throw Error('Agent did not produce successful actual test-command receipts');
+    // A failing test followed by the same command passing is normal repair work.
+    // Keep every attempt in checking events, and deliver the final actual receipt
+    // for each command; an unretried failed command still prevents completion.
+    const tests = [...new Map(output.tests.map(receipt => [receipt.command, receipt])).values()];
+    if (!tests.length || tests.some(receipt => receipt.exitCode !== 0)) throw Error('Agent did not produce successful actual test-command receipts');
     if (typeof output.result.summary !== 'string' || !output.result.summary.trim()) throw Error('Agent produced no structured summary');
-    const result = { summary: (options['test-runner'] ? '[synthetic test runner] ' : '') + redact(output.result.summary, config, 12000), ...changes, tests: output.tests, worktree, ...(output.agentSession ? { agentSession: output.agentSession } : {}) };
+    const result = { summary: (options['test-runner'] ? '[synthetic test runner] ' : '') + redact(output.result.summary, config, 12000), ...changes, tests, worktree, ...(output.agentSession ? { agentSession: output.agentSession } : {}) };
     await event('delivering', 'Managed process exited; delivering diff and actual test receipts for owner review');
     journal = { ...journal, pid: null, processIdentity: null, result };
     await privateJson(journalFile, journal);
@@ -129,7 +140,7 @@ async function development(config, options, job, parentSignal, journalFile) {
 }
 async function planning(config, options, parentSignal, journalFile) {
   const listing = await tool(config, 'list_planning_jobs');
-  const available = listing.jobs?.find(job => job.status === 'queued' || job.status === 'expired');
+  const available = listing.jobs?.find(job => (job.status === 'queued' || job.status === 'expired') && (!job.planner_retry_at || job.planner_retry_at <= Date.now()));
   if (!available) return false;
   const job = await tool(config, 'claim_planning_job', { job_id: available.id });
   const leaseExpires = typeof job.lease_expires === 'string' ? Date.parse(job.lease_expires) : job.lease_expires;
@@ -167,19 +178,19 @@ async function planning(config, options, parentSignal, journalFile) {
   } finally { clearInterval(timer); }
 }
 export async function runAgent(config, options = {}) {
+  options = selectedCodexOptions(config, options);
   const directory = dirname(config.file), lock = join(directory, 'agent.lock'), journalFile = join(directory, 'journal.json');
   await privateDirectory(directory);
   const release = await acquireLock(lock);
   const controller = new AbortController();
   const shutdown = () => controller.abort(Error('Agent is shutting down'));
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
-  let readiness = { ready: false, error: 'Checking Codex authentication' }, heartbeatRunning = false, probeValidated = false, nextProbe = 0, probeError;
+  let readiness = { ready: false, error: 'Checking Codex configuration' }, heartbeatRunning = false;
   async function beat() {
     if (heartbeatRunning) return;
     heartbeatRunning = true;
     try {
-      const checked = await codexReadiness(options);
-      readiness = checked.probeRequired && probeValidated ? { ready: true, authMode: 'environment' } : (checked.probeRequired && probeError ? { ready: false, error: probeError } : checked);
+      readiness = await codexReadiness(options, config.workspace, config);
       await heartbeat(config, 'agent', readiness.ready, readiness.error);
     } catch (error) {
       readiness = { ready: false, error: redact(error, config) };
@@ -193,23 +204,6 @@ export async function runAgent(config, options = {}) {
     heartbeatTimer = setInterval(beat, 15000);
     do {
       if (controller.signal.aborted) break;
-      if (readiness.probeRequired && !probeValidated && Date.now() >= nextProbe) {
-        nextProbe = Infinity;
-        try {
-          await privateJson(journalFile, { kind: 'authentication', startedAt: Date.now() });
-          await runCodex({ config, options, cwd: config.workspace, directory: join(directory, 'authentication-probe'), schema: developmentSchema, sandbox: 'read-only', timeoutMs: 20000, signal: controller.signal,
-            prompt: 'Do not use any tools or inspect files. Return JSON with summary equal to "authenticated".',
-            started: identity => privateJson(journalFile, { kind: 'authentication', ...identity, startedAt: Date.now() }) });
-          probeValidated = true;
-          await rm(journalFile, { force: true });
-          await beat();
-        } catch (error) {
-          probeError = `Codex authentication probe failed: ${redact(error, config)}`;
-          readiness = { ready: false, error: probeError };
-          await rm(journalFile, { force: true });
-          await heartbeat(config, 'agent', false, readiness.error).catch(() => {});
-        }
-      }
       if (readiness.ready) {
         try {
           const authenticatedOptions = { ...options, authMode: readiness.authMode };
@@ -220,7 +214,7 @@ export async function runAgent(config, options = {}) {
           } else if (config.capabilities.includes('plan')) await planning(config, authenticatedOptions, controller.signal, journalFile);
         } catch (error) {
           process.stderr.write(`Agent task: ${redact(error, config)}\n`);
-          if (/authentication|unauthori[sz]ed|api.key|not.logged.in|invalid.key/i.test(error.message)) { probeValidated = false; readiness = { ready: false, error: redact(error, config) }; await heartbeat(config, 'agent', false, readiness.error).catch(() => {}); }
+          if (/authentication|unauthori[sz]ed|api.key|not.logged.in|invalid.key/i.test(error.message)) { readiness = { ready: false, error: redact(error, config) }; await heartbeat(config, 'agent', false, readiness.error).catch(() => {}); }
           // A delivery journal must be reconciled before any new task is started.
           await recover(config, journalFile);
         }

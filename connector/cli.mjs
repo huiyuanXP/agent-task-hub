@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { checkNode, configPath, git, heartbeat, loadConfig, privateDirectory, privateJson, request, RUNTIME_FILES, serviceUrl, VERSION } from './common.mjs';
 import { serveMcp } from './mcp.mjs';
 import { runAgent, codexReadiness } from './agent.mjs';
+import { codexMetadata, selectedCodexOptions } from './codex-config.mjs';
 
 const begin = '# BEGIN agent-task-hub connector';
 const end = '# END agent-task-hub connector';
 const booleanOptions = new Set(['code-stdin', 'once', 'help']);
-const valueOptions = new Set(['url', 'workspace', 'config', 'name', 'codex', 'test-runner']);
+const valueOptions = new Set(['url', 'workspace', 'config', 'name', 'codex', 'test-runner', 'profile', 'model', 'reasoning']);
 function optionsFor(args) {
   const options = {};
   for (let index = 0; index < args.length; index++) {
@@ -21,7 +22,17 @@ function optionsFor(args) {
       options[name] = args[++index];
     }
   }
+  if (options.profile && !/^[A-Za-z0-9_-]+$/.test(options.profile)) throw Error('--profile must be a name without path separators');
+  if (options.model && (!/^[A-Za-z0-9._:/-]+$/.test(options.model) || options.model.length > 120)) throw Error('--model must be a model name (up to 120 characters)');
+  if (options.reasoning && !['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(options.reasoning)) throw Error('--reasoning must be none, minimal, low, medium, high or xhigh');
   return options;
+}
+async function persistCodexOptions(config, options) {
+  const selected = Object.fromEntries(['profile', 'model', 'reasoning'].filter(name => options[name] !== undefined).map(name => [name, options[name]]));
+  if (!Object.keys(selected).length) return;
+  if (selected.profile) await codexMetadata(selectedCodexOptions(config, options), config.workspace);
+  config.codex = { ...(config.codex || {}), ...selected };
+  await privateJson(config.file, config);
 }
 async function invitation(options) {
   if (options['code-stdin']) {
@@ -115,6 +126,7 @@ async function install(options) {
     await heartbeat(existing, 'mcp');
     existing.runtime = await installRuntime(dirname(file));
     existing.version = VERSION;
+    await persistCodexOptions(existing, options);
     await privateJson(file, existing);
     await clientConfig(existing);
     instructions(existing);
@@ -130,6 +142,7 @@ async function install(options) {
   const directory = dirname(file);
   const runtime = await installRuntime(directory);
   const config = { version: VERSION, installationId: randomUUID(), connectionId: enrollment.connection.id, projectId: enrollment.connection.projectId, project: enrollment.connection.project, capabilities: enrollment.connection.capabilities || [], token: enrollment.token, url: serviceUrl(enrollment.origin || url), workspace, file, runtime };
+  await persistCodexOptions(config, options);
   await privateJson(file, config);
   await excludePrivate(workspace);
   await clientConfig(config);
@@ -141,18 +154,22 @@ async function main() {
   const subcommand = process.argv[2] || 'help';
   const options = optionsFor(process.argv.slice(3));
   if (subcommand === 'help' || options.help) {
-    process.stdout.write('agent-task-hub: install | doctor | mcp | agent | set-url | uninstall\nOptions: --url ORIGIN --workspace GIT_ROOT --config FILE --name NAME --code-stdin\nagent: --once --codex EXECUTABLE; --test-runner FILE is synthetic testing only.\n');
+    process.stdout.write('agent-task-hub: install | doctor | mcp | agent | set-url | uninstall\nOptions: --url ORIGIN --workspace GIT_ROOT --config FILE --name NAME --code-stdin\nCodex: --profile NAME|default --model MODEL --reasoning EFFORT (saved locally); omitted values inherit user configuration.\nagent: --once --codex EXECUTABLE; --test-runner FILE is synthetic testing only.\n');
     return;
   }
   if (subcommand === 'install') return install(options);
   const file = configPath(options), config = await loadConfig(file);
   if (subcommand === 'mcp') return serveMcp(config);
-  if (subcommand === 'agent') return runAgent(config, options);
+  if (subcommand === 'agent') {
+    await persistCodexOptions(config, options);
+    return runAgent(config, selectedCodexOptions(config, options));
+  }
   if (subcommand === 'doctor') {
     await git(config.workspace, ['rev-parse', '--show-toplevel']);
+    await persistCodexOptions(config, options);
+    const readiness = await codexReadiness(selectedCodexOptions(config, options), config.workspace, config);
     await heartbeat(config, 'mcp');
-    const readiness = await codexReadiness(options);
-    process.stdout.write(`Connection: ${config.connectionId}\nVersion: ${VERSION}\nService: reachable\nAgent: ${readiness.ready ? 'authenticated' : readiness.error}\n`);
+    process.stdout.write(`Connection: ${config.connectionId}\nVersion: ${VERSION}\nService: reachable\nCodex: profile=${config.runtimeSelection.profile || 'default'} model=${config.runtimeSelection.model || 'default'} provider=${config.runtimeSelection.provider || 'default'}\nAgent: ${readiness.ready ? 'ready' : readiness.error}\n`);
     return;
   }
   if (subcommand === 'set-url') {

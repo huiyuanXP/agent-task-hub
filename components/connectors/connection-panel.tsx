@@ -88,6 +88,7 @@ export function ConnectionPanel({ projects, onAuthenticationDenied }: {
       <h3>{connection.name}</h3><p>客户端 v{connection.version} · {connection.capabilities.map(c => capabilityNames[c] || c).join("、")}</p>
       <p>最后通信：{connection.lastSeen ? new Date(connection.lastSeen).toLocaleString("zh-CN") : "尚未通信"}</p>
       <p>开发 Agent：{connection.agentReady ? "可用" : "未就绪"}</p>{connection.agentError && <p className="form-error">{connection.agentError}</p>}
+      {connection.runtime && <p>Codex：{connection.runtime.profile ? `Profile ${connection.runtime.profile}` : "本机默认配置"} · {connection.runtime.model || "默认模型"} · {connection.runtime.provider || "默认 provider"}</p>}
       <details><summary>连接详情与近期事件</summary><p>Workspace：{connection.workspace || connection.name}</p><code>{connection.id}</code><p>MCP 最近使用：{connection.mcpLastSeen ? new Date(connection.mcpLastSeen).toLocaleString("zh-CN") : "尚未使用"}</p><p>Agent 最近心跳：{connection.agentLastSeen ? new Date(connection.agentLastSeen).toLocaleString("zh-CN") : "尚未启动"}</p>{connection.events?.map(event => <p key={event.id}>{new Date(event.createdAt).toLocaleString("zh-CN")} · {event.mode} {event.message || ""}</p>)}</details>
       {!connection.revokedAt && <button className="text-btn" disabled={busy} type="button" onClick={() => void revoke(connection.id)}>撤销此连接</button>}
     </article>)}</div>

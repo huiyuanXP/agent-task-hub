@@ -173,3 +173,16 @@ test('owner MCP uses the shared planning domain with existing unscoped claim/sav
  assert.deepEqual(await dispatchPlanningTool(db,'alice','save_plan_and_tickets',{job_id:idea.job_id,claim_token:'retry-done',plan:draft,tickets}),output);
  assert.equal((await dispatchPlanningTool(db,'alice','list_planning_jobs',{})).jobs[0].status,'done');
 });
+
+test('owner sees safe selected runtime while credential fields cannot enter heartbeat metadata',async t=>{
+ const {db}=await fixture(t),client=await enroll(db);
+ const runtime={profile:'mimo',model:'mimo-v2.6-flash',provider:'mimo'};
+ await heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime});
+ const listed=await listConnections(db,'alice');
+ assert.deepEqual(listed.connections[0].runtime,runtime);
+ await assert.rejects(heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime:{...runtime,token:'private-secret'}}),error=>error.status===400);
+ await assert.rejects(heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime:{...runtime,profile:'../../private'}}),error=>error.status===400);
+ await heartbeatConnector(db,client.principal,{mode:'mcp',version:'1.0.0',agentReady:false});
+ assert.deepEqual((await listConnections(db,'alice')).connections[0].runtime,runtime);
+ assert.equal((await listConnections(db,'bob')).connections.length,0);
+});

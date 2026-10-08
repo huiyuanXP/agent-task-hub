@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 export const VERSION = '1.0.0';
-export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'README.md'];
+export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'README.md'];
 export function checkNode() {
   const [major, minor, patch] = process.versions.node.split('.').map(Number);
   if (major < 22 || (major === 22 && (minor < 23 || (minor === 23 && patch < 3)))) throw Error('Node.js 22.23.3 or newer is required');
@@ -39,7 +39,7 @@ export async function loadConfig(path) {
 }
 export function redact(value, config, limit = 1800) {
   let text = String(value?.message ?? value ?? 'Request failed');
-  for (const secret of [config?.token, config?.workspace, config?.file, process.env.OPENAI_API_KEY, process.env.CODEX_API_KEY]) {
+  for (const secret of [config?.token, config?.workspace, config?.file, process.env.OPENAI_API_KEY, process.env.CODEX_API_KEY, ...(config?.runtimeSecrets || [])]) {
     if (secret) text = text.split(secret).join('[redacted]');
   }
   return text.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/\bsk-[A-Za-z0-9_*.-]+/g, '[redacted key]').slice(0, limit);
@@ -91,5 +91,8 @@ export async function git(workspace, args) {
   return result.stdout;
 }
 export async function heartbeat(config, mode, agentReady = false, error) {
-  return request(config, '/api/connector/heartbeat', { mode, version: VERSION, agentReady, ...(error ? { error: redact(error, config) } : {}) });
+  const runtime = config.runtimeSelection;
+  return request(config, '/api/connector/heartbeat', { mode, version: VERSION, agentReady,
+    ...(runtime ? { runtime: Object.fromEntries(['profile', 'model', 'provider'].map(name => [name, typeof runtime[name] === 'string' ? runtime[name] : null])) } : {}),
+    ...(error ? { error: redact(error, config) } : {}) });
 }

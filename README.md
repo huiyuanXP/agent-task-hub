@@ -13,7 +13,7 @@ npm start
 
 账户命令会从终端提示读取密码。默认地址 http://127.0.0.1:5173，数据库 .local/data.sqlite，网页登录入口 /signin。启动时自动应用尚未执行的有序 SQL；已有数据不会在普通重启时清空。
 
-在“连接与执行”创建项目授权码并下载 MCP/CLI 包。/install 提供可点击指南，/install/manifest 提供机器可读安装接口。客户端在目标 Git 仓库运行安装命令，关联项目并添加 MCP 配置；常驻 Agent 使用本机已配置的 Codex CLI 认证，不向工坊上传模型凭据。
+在“连接与执行”创建项目授权码并下载 MCP/CLI 包。/install 提供可点击指南，/install/manifest 提供机器可读安装接口。客户端在目标 Git 仓库运行安装命令，关联项目并添加 MCP 配置；常驻 Agent 使用本机 Codex 默认配置或 --profile 选择的模型/provider/认证，不向工坊上传模型凭据。
 
 规划任务不会自动批准开发。开发执行在独立 Git worktree 中进行，网页记录批准范围、实际变更与测试，用户验收后才完成 Ticket。手工快照、本机 Agent 开发和固定 Docker 操作分别显示。
 

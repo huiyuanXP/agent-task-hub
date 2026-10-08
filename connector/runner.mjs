@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { command, privateDirectory, redact } from './common.mjs';
+import { codexMetadata, selectedCodexOptions } from './codex-config.mjs';
 
 export async function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
@@ -40,15 +41,22 @@ export function runnerInvocation(options, args) {
   return options['test-runner'] ? { executable: process.execPath, args: [options['test-runner'], ...args] } : { executable: options.codex || 'codex', args };
 }
 export async function runCodex({ config, options, cwd, directory, schema, prompt, sandbox, timeoutMs, signal, started, event }) {
+  options = selectedCodexOptions(config, options);
+  const metadata = await codexMetadata(options, cwd);
+  Object.defineProperty(config, 'runtimeSecrets', { value: metadata.secrets, writable: true, configurable: true });
   await privateDirectory(directory);
   const schemaFile = join(directory, 'schema.json'), outputFile = join(directory, 'result.json');
   await writeFile(schemaFile, JSON.stringify(schema), { mode: 0o600 });
-  const mcp = `{agent_task_hub={command=${JSON.stringify(process.execPath)},args=${JSON.stringify([config.runtime, 'mcp', '--config', config.file])},enabled_tools=["get_idea","get_ticket","get_plan","list_tickets","list_plans"]}}`;
-  const args = ['exec', '--ignore-user-config', '--ephemeral', '--sandbox', sandbox, '--json', '--color', 'never', '--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="high"', '-c', 'approval_policy="never"', '-c', `mcp_servers=${mcp}`, '--cd', cwd, '--output-schema', schemaFile, '--output-last-message', outputFile, '-'];
+  const args = ['exec', '--ephemeral', '--sandbox', sandbox, '--json', '--color', 'never'];
+  if (options.profile && options.profile !== 'default') args.push('--profile', options.profile);
+  if (options.model) args.push('--model', options.model);
+  if (options.reasoning) args.push('-c', `model_reasoning_effort=${JSON.stringify(options.reasoning)}`);
+  args.push('-c', 'approval_policy="never"');
+  for (const name of metadata.mcp) if (name !== 'agent_task_hub') args.push('-c', `mcp_servers.${JSON.stringify(name)}.enabled=false`);
+  for (const [name, value] of Object.entries({ command: process.execPath, args: [config.runtime, 'mcp', '--config', config.file], cwd: config.workspace, enabled: true, enabled_tools: ['get_idea', 'get_ticket', 'get_plan', 'list_tickets', 'list_plans'] })) args.push('-c', `mcp_servers.agent_task_hub.${name}=${JSON.stringify(value)}`);
+  args.push('--cd', cwd, '--output-schema', schemaFile, '--output-last-message', outputFile, '-');
   const invocation = runnerInvocation(options, args);
   const childEnvironment = { ...process.env, NO_COLOR: '1' };
-  if (options.authMode === 'persisted') { delete childEnvironment.CODEX_API_KEY; delete childEnvironment.OPENAI_API_KEY; }
-  else if (!childEnvironment.CODEX_API_KEY && childEnvironment.OPENAI_API_KEY) childEnvironment.CODEX_API_KEY = childEnvironment.OPENAI_API_KEY;
   const ownerIdentity = await processIdentity(process.pid);
   const supervisedArgs = [join(import.meta.dirname, 'supervisor.mjs'), String(process.pid), ownerIdentity, String(Date.now() + timeoutMs), invocation.executable, ...invocation.args];
   const child = spawn(process.execPath, supervisedArgs, { cwd, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: childEnvironment });
