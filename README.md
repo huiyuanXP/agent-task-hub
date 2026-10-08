@@ -1,77 +1,32 @@
-# Agent Task Hub
+# 点子工坊 · Agent Task Hub
 
-Source handoff for a private task-planning workspace: Ideas → Plans → Tickets, execution snapshot records, history, and a planning-only MCP/event interface. Chinese-language application UI.
+本机任务工作区：点子 → Plan → Tickets → 批准开发 → Agent 执行 → 结果与验收。支持按项目安装 MCP/CLI，后台查看注册客户端及常驻 Agent 的通信状态。
 
-**Built Workers now verify independent Cloudflare Access identity and private membership.** New Access registration, private ingress and live SSO validation remain separately authorized work under issue #5; the task-execution adapter is not implemented. The original live Site remains separate. See [authentication configuration and boundaries](docs/AUTHENTICATION.md).
-
-## Source and safe separation
-
-- Base commit: `98991e5dbaff6b5ac6cdd68f89e033a06a350c38` (reported live version 6 by the source owner)
-- Exported from the recovered official source checkout on 2026-10-01; no Git history or production data included
-- `.openai/hosting.json` keeps the logical `DB` and MCP capability declarations needed by the build, but its original `project_id` has been removed
-- This copy has no link to the original deployed Site. Do not reinsert the original ID. A new deployment needs separate registration, resources, access policy, and explicit review
-- See [migration handoff](docs/MIGRATION.md), [12-ticket roadmap](docs/ROADMAP.md), and [package validation](docs/PACKAGING.md)
-- See [VM1 initialization and validation](docs/VM1-VALIDATION.md) for reproduced checks, local repairs, and independent deployment prerequisites.
-- Track upcoming work in the [GitHub issue roadmap](https://github.com/huiyuanXP/agent-task-hub/issues/27) and [published issue index](docs/GITHUB-ISSUE-ROADMAP.md).
-
-## Requirements
-
-Node.js 22.13.0 or later, npm, and a platform supported by the locked dependencies. This project uses React 19, Vinext/Vite, a Cloudflare Worker, and D1/SQLite. It is not a generic Node server package. Keep `package-lock.json`; do not substitute fresh dependency versions during initial reproduction.
-
-## Install, build, and local preview
-
-From the extracted project directory:
+使用 Node.js 22.23.3 或更新版本，原生 Next.js/React 与本地 SQLite。保留 package-lock.json。
 
 ```sh
 npm run install:ci
 npm run build
+npm run accounts -- create owner
+npm start
 ```
 
-A clean clone defaults to the portable execution profile. Build output is `dist/`; the generated Worker configuration is `dist/server/wrangler.json`. No dependencies were installed or build rerun while creating this archive.
+账户命令会从终端提示读取密码。默认地址 http://127.0.0.1:5173，数据库 .local/data.sqlite，网页登录入口 /signin。启动时自动应用尚未执行的有序 SQL；已有数据不会在普通重启时清空。
 
-For a **fresh local database only**, apply every committed migration once in filename order after building. Use a new isolated checkout or ensure `.wrangler/state` has never been initialized:
+在“连接与执行”创建项目授权码并下载 MCP/CLI 包。/install 提供可点击指南，/install/manifest 提供机器可读安装接口。客户端在目标 Git 仓库运行安装命令，关联项目并添加 MCP 配置；常驻 Agent 使用本机已配置的 Codex CLI 认证，不向工坊上传模型凭据。
 
-```sh
-for migration in drizzle/*.sql; do
-  node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file "$migration" || exit 1
-done
-npm run dev
-```
+规划任务不会自动批准开发。开发执行在独立 Git worktree 中进行，网页记录批准范围、实际变更与测试，用户验收后才完成 Ticket。手工快照、本机 Agent 开发和固定 Docker 操作分别显示。
 
-Open the loopback URL printed by the dev server (normally `http://localhost:5173`). Visit `/signin-with-chatgpt?return_to=/` there to use the development-only mock identity. It is synthetic and does not log into a real account. Local records are initially empty. Do not reapply these raw SQL files to a database that already has their schema.
+- [本机部署](docs/DEPLOYMENT.md)
+- [账户、客户端授权与撤销](docs/AUTHENTICATION.md)
+- [客户端安装与 workspace](docs/CONNECTORS.md)
+- [规划与修订](docs/PLANNING.md)
+- [执行和验收](docs/EXECUTION.md)
+- [固定 Docker Runner](docs/RUNNER.md)
+- [实际功能清单](docs/FEATURES.md)
+- [测试说明](docs/TESTING.md)
+- [后续工作](docs/ROADMAP.md)
 
-`npm start` previews the built Worker on loopback using the same local D1 state, and defaults to fail-closed Access verification. Independent serving requires the public metadata, private membership and exact HTTPS origin in [AUTHENTICATION.md](docs/AUTHENTICATION.md); the loopback preview URL is not that origin. Use the development server for synthetic local UI work or `npm run test:auth:browser` for isolated verification of the built identity flow. Keep mock-auth development servers private and loopback-only.
+开发检查使用 npm run build、npx --no-install tsc --noEmit、npm run lint 和与变更相关的测试；客户端与 workspace 测试使用 npm run test:connectors。Docker 检查需要真实本机 daemon 和锁定的镜像，不能以本机 Agent 测试替代。
 
-The `.env.example` contains only optional non-secret tooling switches. Local preview needs no copied production secrets. The application reads the `DB` runtime binding rather than a database connection-string variable.
-
-## Regression checks
-
-Run `npm ci --prefix tests/browser` and `npx --prefix tests/browser playwright install --with-deps chromium` after the locked application install, then run `npm test`. The suite builds a fresh temporary application and D1 database, selects loopback ports and cleans up its servers after each run. `npm run test:auth` checks the token policy; `npm run test:auth:api` builds and tests the actual independent Worker; `npm run test:auth:browser` exercises its session UI against ephemeral signed identities. `npm run test:unit` runs harness boundary checks; `npm run test:browser-policy` checks redirected requests and browser network isolation; `npm run test:integration` runs synthetic API/MCP and browser regressions. See [testing instructions](docs/TESTING.md) for parallel runs, artifacts and the synthetic identity boundary. PRs and pushes to `main` or `strix/**` run the same checks in CI.
-
-## Repository layout
-
-- `app/page.tsx`, `app/globals.css`: workspace UI
-- `app/api/records`, `app/api/planning`: authenticated records and planning status
-- `app/mcp/route.ts`: planning tools, event subscriptions, claim/save protocol
-- `lib/access-identity.mts`, `lib/authentication.ts`, `app/chatgpt-auth.ts`: verified request identity and session boundary
-- `lib/events.ts`, `lib/planning-state.ts`: delivery and revision-aware planning
-- `db/`, `drizzle/`: schema, ordered migrations, and migration metadata
-- `build/`, `scripts/`: **source code** for build/runtime integration; retain these folders
-- `components/`, `hooks/`, `public/`, `vendor/`: shared UI and assets; retain bundled license notices
-
-Planning jobs do not authorize ticket execution. A saved Run is currently a record/snapshot, not proof that a real execution service exists. Subscription records and signing secrets live in runtime storage and are deliberately not part of this package; webhook consumers and subscriptions must be configured separately.
-
-## Create your GitHub repository
-
-Create an empty repository, then run in this extracted directory:
-
-```sh
-git init
-git add .
-git commit -m "Import Agent Task Hub source"
-git branch -M main
-git remote add origin <YOUR_GITHUB_REPOSITORY_URL>
-git push -u origin main
-```
-
-Choose private visibility initially and review the source and dependency licenses before public release. No repository was created, pushed, or deployed as part of packaging. No application license has been invented or granted by this archive; retain third-party notices and choose an application license separately if desired.
+私有数据库、凭据、执行日志与 worktree 不进入 Git。保留 vendor、public 和 vendored skills 中的第三方许可说明。

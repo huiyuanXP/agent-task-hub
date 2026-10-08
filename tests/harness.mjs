@@ -7,17 +7,18 @@ import { openSync, closeSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const inputs = [
-  'app', 'build', 'components', 'db', 'drizzle', 'hooks', 'lib', 'public', 'scripts', 'tests',
-  'package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts', 'next.config.ts',
-  'postcss.config.mjs', 'eslint.config.mjs', 'drizzle.config.ts', 'components.json',
-  'cloudflare-env.d.ts', '.env.example', '.openai/hosting.json',
+ 'app','components','hooks','lib','public','scripts','tests','runner','migrations','connector',
+ 'package.json','package-lock.json','tsconfig.json','next.config.ts','next-env.d.ts',
+ 'postcss.config.mjs','eslint.config.mjs','components.json','.env.example',
 ];
 function excluded(name) {
-  return ['node_modules', 'dist', '.git', '.wrangler', '.sites-runtime', '.next', '.vinext', 'test-results'].includes(name)
+  return ['node_modules', '.git', '.next', '.local', 'test-results'].includes(name)
     || (name.startsWith('.env') && name !== '.env.example')
     || name.startsWith('.dev.vars')
     || /\.(?:sqlite|sqlite3|db)(?:-(?:shm|wal|journal))?$/.test(name)
-    || name.endsWith('.tsbuildinfo');
+    || name.endsWith('.tsbuildinfo')
+    || ['control.json','runner.json','credentials.json','sessions.json'].includes(name)
+    || /\.(?:pem|key|p12|pfx)$/.test(name);
 }
 
 async function copyInput(source, target) {
@@ -81,13 +82,13 @@ export async function freePort() {
   }
 }
 
-export function startChild(command, args, { cwd, env = process.env, logFile } = {}) {
+export function startChild(command, args, { cwd, env = process.env, logFile, graceMs = 3000 } = {}) {
   const fd = logFile ? openSync(logFile, 'a') : undefined;
   let child;
   try {
     child = spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', fd ?? 'inherit', fd ?? 'inherit'] });
   } finally { if (fd !== undefined) closeSync(fd); }
-  const record = { child, result: null, command: `${command} ${args.join(' ')}` };
+  const record = { child, graceMs, result: null, command: `${command} ${args.join(' ')}` };
   record.done = new Promise(resolve => {
     child.once('error', error => { record.result = { error }; resolve(record.result); });
     child.once('close', (code, signal) => { record.result = { code, signal }; resolve(record.result); });
@@ -110,7 +111,7 @@ export async function stopChild(record) {
     signalGroup(record, 'SIGTERM');
     const timeout = new AbortController();
     try {
-      await Promise.race([record.done, delay(3000, undefined, { signal: timeout.signal })]);
+      await Promise.race([record.done, delay(record.graceMs ?? 3000, undefined, { signal: timeout.signal })]);
     } finally { timeout.abort(); }
     // The parent may exit before a descendant; always signal the whole group.
     signalGroup(record, 'SIGKILL');

@@ -12,7 +12,7 @@ export interface DeliveryRow {
 // always suppresses callbacks, including an expired claim awaiting recovery.
 const currentQueued = `EXISTS(SELECT 1 FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner
  WHERE j.id=planning_deliveries.job_id AND j.owner=planning_deliveries.owner AND j.generation=planning_deliveries.generation
- AND j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.kind='idea' AND i.revision=j.idea_revision)`;
+ AND j.status='queued' AND j.planner_error IS NULL AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.kind='idea' AND i.revision=j.idea_revision)`;
 const activeTarget = `EXISTS(SELECT 1 FROM subscriptions s JOIN jobs j ON j.id=planning_deliveries.job_id AND j.owner=planning_deliveries.owner
  WHERE s.id=planning_deliveries.subscription_id AND s.owner=planning_deliveries.owner AND s.expires>?
  AND (COALESCE(json_extract(s.body,'$.args.project'),'')='' OR json_extract(s.body,'$.args.project')=json_extract(j.event,'$.data.project')))`;
@@ -20,7 +20,7 @@ const activeTarget = `EXISTS(SELECT 1 FROM subscriptions s JOIN jobs j ON j.id=p
 export async function discoverDeliveries(db: LocalDatabase, owner?: string, jobId?: string) {
   const now = Date.now();
   const { results } = await db.prepare(`SELECT j.* FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner
-    WHERE j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.kind='idea' AND i.revision=j.idea_revision
+    WHERE j.status='queued' AND j.planner_error IS NULL AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.kind='idea' AND i.revision=j.idea_revision
     ${owner ? 'AND j.owner=?' : ''} ${jobId ? 'AND j.id=?' : ''} ORDER BY j.updated_at,j.id LIMIT 50`)
     .bind(...(owner ? [owner] : []), ...(jobId ? [jobId] : [])).all<JobRow>();
   for (const job of results) {
@@ -28,7 +28,7 @@ export async function discoverDeliveries(db: LocalDatabase, owner?: string, jobI
       db.prepare(`INSERT OR IGNORE INTO planning_deliveries(id,owner,job_id,subscription_id,generation,event_id,status,next_attempt_at,created_at,updated_at)
         SELECT j.id || ':' || s.id || ':' || j.generation,j.owner,j.id,s.id,j.generation,json_extract(j.event,'$.eventId'),'pending',?,?,?
         FROM jobs j JOIN records i ON i.id=j.idea_id AND i.owner=j.owner JOIN subscriptions s ON s.owner=j.owner
-        WHERE j.id=? AND j.owner=? AND j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND j.generation=? AND i.revision=j.idea_revision AND s.expires>?
+        WHERE j.id=? AND j.owner=? AND j.status='queued' AND j.planner_error IS NULL AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND j.generation=? AND i.revision=j.idea_revision AND s.expires>?
         AND (COALESCE(json_extract(s.body,'$.args.project'),'')='' OR json_extract(s.body,'$.args.project')=json_extract(j.event,'$.data.project'))`)
         .bind(now,now,now,job.id,job.owner,job.generation,now),
       db.prepare(`UPDATE planning_deliveries SET status='pending',terminal_reason=NULL,next_attempt_at=?,updated_at=?
@@ -43,7 +43,7 @@ export async function discoverDeliveries(db: LocalDatabase, owner?: string, jobI
 export async function refreshDeliverySummary(db: LocalDatabase, jobId: string, owner: string) {
   // Compute inside a single statement so an old delivery cannot overwrite a new generation's summary.
   await db.prepare(`UPDATE jobs SET delivery=CASE
-    WHEN recovery_reason='recovery_exhausted' THEN 'failed'
+    WHEN recovery_reason='recovery_exhausted' OR planner_error IS NOT NULL THEN 'failed'
     WHEN NOT EXISTS(SELECT 1 FROM planning_deliveries d WHERE d.job_id=jobs.id AND d.owner=jobs.owner AND d.generation=jobs.generation AND COALESCE(d.terminal_reason,'')<>'subscription_inactive') THEN 'no_subscription'
     WHEN NOT EXISTS(SELECT 1 FROM planning_deliveries d WHERE d.job_id=jobs.id AND d.owner=jobs.owner AND d.generation=jobs.generation AND d.status<>'accepted') THEN 'accepted'
     WHEN EXISTS(SELECT 1 FROM planning_deliveries d WHERE d.job_id=jobs.id AND d.owner=jobs.owner AND d.generation=jobs.generation AND d.status='accepted') THEN 'partial'
@@ -93,7 +93,7 @@ async function attemptDelivery(db: LocalDatabase, row: DeliveryRow) {
   if(!claimed.meta.changes) return;
   const context=await db.prepare(`SELECT j.event,s.body,d.attempts FROM planning_deliveries d JOIN jobs j ON j.id=d.job_id AND j.owner=d.owner
     JOIN records i ON i.id=j.idea_id AND i.owner=j.owner JOIN subscriptions s ON s.id=d.subscription_id AND s.owner=d.owner
-    WHERE d.id=? AND d.delivery_token=? AND j.generation=d.generation AND j.status='queued' AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.revision=j.idea_revision AND s.expires>?
+    WHERE d.id=? AND d.delivery_token=? AND j.generation=d.generation AND j.status='queued' AND j.planner_error IS NULL AND COALESCE(j.recovery_reason,'')<>'recovery_exhausted' AND i.revision=j.idea_revision AND s.expires>?
     AND (COALESCE(json_extract(s.body,'$.args.project'),'')='' OR json_extract(s.body,'$.args.project')=json_extract(j.event,'$.data.project'))`)
     .bind(row.id,token,Date.now()).first<{event:string;body:string;attempts:number}>();
   if(!context) return; // Acquired token will be invalidated by the next sweep.

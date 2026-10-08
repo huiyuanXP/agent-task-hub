@@ -13,23 +13,23 @@ test('workspaces copy application inputs without local state, secrets or symlink
   const source = await mkdtemp(join(tmpdir(), 'hub-source-'));
   let first, second;
   try {
-    for (const dir of ['app', '.wrangler/state', '.sites-runtime', 'node_modules', 'dist', '.git', '.openai']) {
+    for (const dir of ['app', '.local/state', 'private-config', 'node_modules', 'dist', '.git', 'migrations']) {
       await mkdir(join(source, dir), { recursive: true });
     }
-    for (const file of ['.dev.vars', '.env.private', '.wrangler/state/development.sqlite', '.sites-runtime/execution-profile.json', 'node_modules/private', 'dist/private', '.git/private', 'app/private.db', 'app/.dev.vars.local', '.openai/credentials.json']) {
+    for (const file of ['.dev.vars', '.env.private', '.local/state/development.sqlite', 'private-config/execution.json', 'node_modules/private', 'dist/private', '.git/private', 'app/private.db', 'app/.dev.vars.local','app/control.json','app/runner.json','app/credentials.json','app/session.key','app/private.pem', 'private-config/credentials.json']) {
       await writeFile(join(source, file), 'must not be copied');
     }
     await writeFile(join(source, 'app/page.tsx'), 'synthetic source');
     await writeFile(join(source, '.env.example'), 'EXAMPLE_ONLY=');
-    await writeFile(join(source, '.openai/hosting.json'), '{"d1":"DB"}');
+    await writeFile(join(source, 'migrations/001.sql'), 'CREATE TABLE synthetic(id TEXT);');
     await symlink(join(source, '.dev.vars'), join(source, 'app/secret-link'));
     first = await createWorkspace(source);
     second = await createWorkspace(source);
     assert.notEqual(first, second);
     assert.equal(await readFile(join(first, 'app/page.tsx'), 'utf8'), 'synthetic source');
     assert.equal(await readFile(join(first, '.env.example'), 'utf8'), 'EXAMPLE_ONLY=');
-    assert.equal(await readFile(join(first, '.openai/hosting.json'), 'utf8'), '{"d1":"DB"}');
-    for (const file of ['.wrangler', '.sites-runtime', '.dev.vars', '.env.private', 'node_modules', 'dist', '.git', 'app/private.db', 'app/.dev.vars.local', 'app/secret-link', '.openai/credentials.json']) {
+    assert.equal(await readFile(join(first, 'migrations/001.sql'), 'utf8'), 'CREATE TABLE synthetic(id TEXT);');
+    for (const file of ['.local', 'private-config', '.dev.vars', '.env.private', 'node_modules', 'dist', '.git', 'app/private.db', 'app/.dev.vars.local','app/control.json','app/runner.json','app/credentials.json','app/session.key','app/private.pem', 'app/secret-link', 'private-config/credentials.json']) {
       await assert.rejects(access(join(first, file)), { code: 'ENOENT' });
     }
   } finally {
@@ -37,15 +37,15 @@ test('workspaces copy application inputs without local state, secrets or symlink
   }
 });
 
-test('workspace does not follow a symlinked hosting configuration directory', async () => {
+test('workspace does not follow a symlinked schema directory', async () => {
   const source = await mkdtemp(join(tmpdir(), 'hub-source-'));
   const outside = await mkdtemp(join(tmpdir(), 'hub-private-'));
   let workspace;
   try {
-    await writeFile(join(outside, 'hosting.json'), 'must not be copied');
-    await symlink(outside, join(source, '.openai'));
+    await writeFile(join(outside, '001.sql'), 'must not be copied');
+    await symlink(outside, join(source, 'migrations'));
     workspace = await createWorkspace(source);
-    await assert.rejects(access(join(workspace, '.openai/hosting.json')), { code: 'ENOENT' });
+    await assert.rejects(access(join(workspace, 'migrations/001.sql')), { code: 'ENOENT' });
   } finally {
     for (const dir of [workspace, source, outside].filter(Boolean)) await rm(dir, { recursive: true, force: true });
   }

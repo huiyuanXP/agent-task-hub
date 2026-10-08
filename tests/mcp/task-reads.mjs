@@ -73,7 +73,7 @@ try {
   }
 
   const snapshot = async () => {
-    const tables = await rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name");
+    const tables = await rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const result = {};
     for (const {name} of tables) result[name] = await rows(`SELECT * FROM "${name.replaceAll('"','""')}" ORDER BY rowid`);
     return result;
@@ -200,7 +200,7 @@ try {
     const tool = discovered.find(tool=>tool.name===name); assert.ok(tool); assert.equal(tool.inputSchema.additionalProperties,false); assert.deepEqual(tool.annotations,{readOnlyHint:true,idempotentHint:true,destructiveHint:false,openWorldHint:false});
   }
   assert.deepEqual(await snapshot(),before,'All persistent user tables unchanged by successful and rejected reads');
-  console.log('PASS: synthetic signed JWT privacy, original protocol/tools, all-table read-only snapshot');
+  console.log('PASS: synthetic token privacy, original protocol/tools, all-table read-only snapshot');
 
   // Keyset continuation must survive deletion of the boundary row and insertion above it.
   const initialPage = value(await rpc('list_tickets',{...filters,limit:1}));

@@ -1,6 +1,6 @@
 # 子项目二：真实规划和开发 Agent
 
-状态：等待用户审阅；依赖连接子项目，约束继承 workspace-loop-design。
+状态：用户已批准；依赖连接子项目，约束继承 workspace-loop-design。
 
 ## 规划
 

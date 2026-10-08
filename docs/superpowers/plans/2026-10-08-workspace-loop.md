@@ -102,7 +102,7 @@ node connector/cli.mjs doctor --config /tmp/ath-test/.agent-task-hub/connection.
 - [ ] Make connector cards actionable: guide, package download, invite, installation command, project and capability choice.
 - [ ] Show connection states/details/revoke, automatic status refresh, live Agent authentication failure.
 - [ ] Show pending approvals, development events/diff/tests, cancellation and acceptance alongside existing distinct Docker operation panel.
-- [ ] Add package build script to application build sequence and downloadable immutable runtime archive; package download is protected but install guide is public and contains no credentials.
+- [ ] Add package build script to application build sequence and downloadable immutable runtime archive; package and installation guide are public code/instructions with no credentials; all owner and client data remain authenticated.
 - [ ] Complete native current-only docs and FEATURES with actual source behavior, retaining user AGENTS directions.
 
 ## Task 5 — Controller integration and self-hosted acceptance

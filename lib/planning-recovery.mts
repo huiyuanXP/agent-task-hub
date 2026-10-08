@@ -39,7 +39,7 @@ async function transition(db:LocalDatabase, job:JobRow, manual:boolean) {
   const event=JSON.parse(job.event) as PlanningEvent;
   event.eventId=`evt_${job.id}:g${job.generation+1}`;
   event.timestamp=new Date(now).toISOString();
-  await db.prepare(`UPDATE jobs SET status='queued',claim_token=NULL,lease=NULL,wake_deadline=NULL,generation=generation+1,
+  await db.prepare(`UPDATE jobs SET status='queued',claim_token=NULL,lease=NULL,wake_deadline=NULL,connector_id=NULL,planner_error=NULL,planner_retry_at=NULL,generation=generation+1,
     recoveries=?,retry_after=?,recovery_reason=?,event=?,delivery='pending',updated_at=?
     WHERE id=? AND owner=? AND generation=? AND claim_token IS ? AND ${predicate} AND ${currentIdea}`)
     .bind(manual?0:job.recoveries+1,manual?now+60000:job.retry_after,manual?'manual_retry':reason,JSON.stringify(event),now,

@@ -26,13 +26,17 @@ try {
   networkErrors = restricted.errors;
   context.on('page', current => current.on('pageerror', error => errors.push(error.message)));
   page = await context.newPage();
-  await page.goto(dev + '/signin-with-chatgpt?return_to=/', { waitUntil: 'networkidle' });
+  await page.goto(dev + '/signin?return_to=/', { waitUntil: 'networkidle' });
+  await page.getByLabel('用户名').fill('alice');await page.getByLabel('密码').fill('incorrect-password');await page.getByRole('button',{name:'登录',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'用户名或密码无效'}).waitFor();
+  assert.equal(new URL(page.url()).pathname,'/signin');ok('Browser password denial preserves the login form without issuing a session');
+  await page.getByLabel('密码').fill('synthetic-password');await page.getByRole('button',{name:'登录',exact:true}).click();
   await page.getByRole('button', { name: '收集点子', exact: true }).waitFor();
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).waitFor();
-  await page.getByLabel('当前账户').getByText('Seedy', { exact: true }).waitFor();
-  await page.getByText('本地开发身份').waitFor();
-  assert.equal(await page.getByLabel('账户缩写').innerText(), 'S');
-  ok('Signed-in UI hydrates with actual development identity and label');
+  await page.getByLabel('当前账户').getByText('Alice Local', { exact: true }).waitFor();
+  await page.getByText(/本地账户/).waitFor();
+  assert.equal(await page.getByLabel('账户缩写').innerText(), 'AL');
+  ok('Signed-in UI hydrates with actual local account and label');
 
   const browserTitle = 'Regression browser synthetic idea ' + Date.now();
   await page.getByRole('textbox', { name: '快速记录点子' }).fill(browserTitle);
@@ -43,7 +47,7 @@ try {
   const created = await savedResponse.json();
   assert.ok((await planningResponse.json()).jobs.some(job => job.idea_id === created.id && job.status === 'queued' && job.delivery === 'no_subscription'));
   await page.getByRole('heading', { name: browserTitle, exact: true }).waitFor();
-  await page.locator('article').filter({ has: page.getByRole('heading', { name: browserTitle, exact: true }) }).getByText('已排队 · 待连接插件', { exact: true }).waitFor();
+  await page.locator('article').filter({ has: page.getByRole('heading', { name: browserTitle, exact: true }) }).getByText('已排队 · 等待项目 Agent', { exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelector('[aria-label="快速记录点子"]').value === '');
   assert.equal(await page.getByRole('textbox', { name: '快速记录点子' }).inputValue(), '');
   ok('Browser captures idea, creates planning request and updates UI');
@@ -55,7 +59,7 @@ try {
   const ideaDialog = page.getByRole('dialog');
   await ideaDialog.getByRole('textbox', { name: '标题', exact: true }).fill(fixture.ideaTitle + ' revised');
   const revisionSaved = page.waitForResponse(response => response.url() === dev + '/api/records' && response.request().method() === 'POST' && response.status() === 200);
-  await ideaDialog.getByRole('button', { name: '保存到云端', exact: true }).click();
+  await ideaDialog.getByRole('button', { name: '保存到本地', exact: true }).click();
   await revisionSaved;
   await page.getByRole('heading', { name: fixture.ideaTitle + ' revised', exact: true }).waitFor();
   await page.getByRole('button', { name: '规划工作台', exact: false }).click();
@@ -102,22 +106,23 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: browserTitle, exact: true }).waitFor();
   ok('Synthetic records persist across browser reload');
-  const logout = page.waitForResponse(response => response.url() === dev + '/signout-with-chatgpt' && response.request().method() === 'POST');
+  const logout = page.waitForResponse(response => response.url() === dev + '/api/auth/logout' && response.request().method() === 'POST');
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   assert.equal((await logout).status(), 303);
-  await page.getByRole('link', { name: '登录', exact: true }).waitFor();
-  assert.equal((await context.cookies()).some(cookie => cookie.name === '__sites_local_auth'), false);
-  ok('Development logout uses POST and removes local identity');
+  await page.waitForURL(dev+'/signin');
+  await page.getByRole('button',{name:'登录',exact:true}).waitFor();
+  assert.equal((await context.cookies()).some(cookie => cookie.name === 'hub_session'), false);
+  ok('Local logout uses POST and removes the real browser session');
   // The page polls session state; readiness is its rendered denial, not global network idleness.
   await page.goto(preview + '/', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('alert').waitFor();
-  assert.match(await page.getByRole('alert').innerText(), /登录/);
+  await page.locator('.alert[role="alert"]').waitFor();
+  assert.match(await page.locator('.alert[role="alert"]').innerText(), /登录/);
   ok('Built preview hydrates and displays anonymous API auth failure');
   await restricted.flushNetworkEvidence();
   assert.deepEqual(errors, [], 'Browser JavaScript errors');
   assert.deepEqual(networkErrors, [], 'Browser network policy errors');
-  assert.ok(requestedExternal.every(origin => origin === 'https://fonts.googleapis.com'), 'Unexpected external application request');
-  ok('Remote requests blocked; UI remains usable with system fonts');
+  assert.deepEqual(requestedExternal,[], 'External application requests');
+  ok('All UI assets are local; zero external application requests');
   await evidence('passed');
 } catch (error) {
   await evidence('failed', error);

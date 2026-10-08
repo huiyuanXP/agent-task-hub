@@ -100,12 +100,13 @@ async function runDTO(db: ExecutionDatabase, owner: string, row: ReadRunRow, reg
     attestations: receipts.results.map(({ receipt }) => evidenceDTO(receipt, owner, row, contractHash)).filter(value => value !== null),
     authorization: await authorizationDTO(db, owner, row, registry) };
 }
-export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry) {
+export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry, project?: string) {
   const ticketId = input.filters.ticket_id;
-  await requireRecord(db, owner, 'ticket', ticketId);
-  const context: CursorContext = { owner, resource: 'ticket_runs', filters: input.filters };
+  await requireRecord(db, owner, 'ticket', ticketId, project);
+  const context: CursorContext = { owner, resource: 'ticket_runs', filters: {...input.filters, ...(project === undefined ? {} : {project})} };
   const cursor = await decodeCursor(input.cursor, context);
   const clauses: string[] = [], params: (string | number)[] = [owner, ticketId, owner, ticketId];
+  if (project !== undefined) { clauses.push("COALESCE(NULLIF(json_extract(body,'$.project'),''),CASE WHEN source='manual' THEN NULLIF(json_extract(body,'$.contract.project'),'') END,'通用')=?"); params.push(project); }
   for (const key of ['source', 'state']) if (key in input.filters) { clauses.push(`${key}=?`); params.push(input.filters[key]); }
   if (cursor) {
     clauses.push('(created<? OR (created=? AND (id<? OR (id=? AND source<?))))');

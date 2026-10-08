@@ -1,3 +1,4 @@
+import {fixtureEnvironment} from './fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, fork } from 'node:child_process';
@@ -11,7 +12,7 @@ import { createAccount } from '../../lib/local-auth.mts';
 const worker = fileURLToPath(new URL('./auth-race-worker.mjs', import.meta.url));
 async function scenario(name) {
   const { stdout } = await promisify(execFile)(process.execPath, ['--experimental-strip-types', worker, name], {
-    env: { ...process.env, UV_THREADPOOL_SIZE: '1' }, timeout: 15000,
+    env: { ...fixtureEnvironment(), UV_THREADPOOL_SIZE: '1' }, timeout: 15000,
   });
   return JSON.parse(stdout);
 }
@@ -59,7 +60,7 @@ test('separate processes share atomic throttle admission in the same SQLite file
     await createAccount(db, { username: 'alice', displayName: 'Alice', password: 'synthetic-password' });
     const clients = Array.from({ length: 3 }, () => {
       const child = fork(worker, ['process-admission', file], {
-        execArgv: ['--experimental-strip-types'], env: { ...process.env, UV_THREADPOOL_SIZE: '1' },
+        execArgv: ['--experimental-strip-types'], env: { ...fixtureEnvironment(), UV_THREADPOOL_SIZE: '1' },
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       });
       children.push(child);

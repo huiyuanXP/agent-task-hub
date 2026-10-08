@@ -1,0 +1,9 @@
+{
+  "name": "agent-task-hub-connector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.23.3" },
+  "bin": { "agent-task-hub": "./cli.mjs" },
+  "scripts": { "test": "node --test ../tests/connector-client/*.test.mjs" }
+}

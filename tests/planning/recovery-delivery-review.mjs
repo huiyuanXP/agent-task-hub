@@ -4,7 +4,7 @@ import { planningFixture } from './fixture.mjs';
 
 async function setup() {
   const secret = 'whsec_' + Buffer.alloc(32, 17).toString('base64');
-  const url = 'https://chatgpt.com/delivery-review';
+  const url = 'http://127.0.0.1:1/delivery-review';
   const callback = {secret, events: [], respond: () => new Response(null, {status: 503})};
   const f = await planningFixture({callbacks: {[url]: callback}, engineHarness: true});
   const rows = async (sql, ...args) => (await f.db.prepare(sql).bind(...args).all()).results;
@@ -94,7 +94,7 @@ for (const boundary of ['backoff', 'exhaustion']) await test(`delayed competing 
         if ((await f.engine('pause-state', job.id, job.owner)).paused) { ready = true; break; }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      assert.ok(ready, 'Delayed Worker selected its due target before the competing attempt');
+      assert.ok(ready, 'Delayed native query selected its due target before the competing attempt');
       await deliver();
       await due();
     } finally { await f.engine('resume', job.id, job.owner); await paused; }

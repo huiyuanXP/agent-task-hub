@@ -1,4 +1,4 @@
-// Contract regressions: actual authenticated Worker routes, not internal helpers.
+// Contract regressions: actual authenticated Next routes, not internal helpers.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { planningFixture } from './fixture.mjs';
@@ -11,7 +11,7 @@ const create = async (project, actor = 'alice') => {
   assert.equal(response.status, 201); return { idea: response.body, id: `planning:${response.body.id}:1` };
 };
 const subscription = async (project, method = 'events/subscribe', actor = 'alice') => {
-  const url = 'https://chatgpt.com/lifecycle-' + project;
+  const url = 'http://127.0.0.1:1/lifecycle-' + project;
   callbacks[url] ??= { secret, events: [] };
   const response = await f.request('/mcp', { jsonrpc: '2.0', id: 1, method, params: { name: 'idea.planning_requested', arguments: { project }, delivery: { mode: 'webhook', url, secret } } }, actor);
   assert.ok(response.body.result, JSON.stringify(response.body));
@@ -20,7 +20,7 @@ const subscription = async (project, method = 'events/subscribe', actor = 'alice
 const publicJob = async id => (await f.request('/api/planning')).body.jobs.find(j => j.id === id);
 const noSecrets = value => {
   const text = JSON.stringify(value);
-  for (const field of ['claim_token', 'delivery_token', 'eventId', 'previousSecret', 'secret-marker', secret, 'https://chatgpt.com/lifecycle-']) assert.ok(!text.includes(field), `Private field leaked: ${field}`);
+  for (const field of ['claim_token', 'delivery_token', 'eventId', 'previousSecret', 'secret-marker', secret, f.callbackOrigin, 'http://127.0.0.1:1/lifecycle-']) assert.ok(!text.includes(field), `Private field leaked: ${field}`);
 };
 try {
   await test('subscribe and refresh immediately backfill exact owner/project with bounded discovery and outbound', async () => {
@@ -40,7 +40,7 @@ try {
     assert.ok(count.n >= 20 && count.n <= 50, 'At most fifty discovered jobs in subscription request');
   });
   await test('subscription runtime shape validation fails before verification or persistence', async () => {
-    const url = 'https://chatgpt.com/lifecycle-invalid';
+    const url = 'http://127.0.0.1:1/lifecycle-invalid';
     callbacks[url] = { secret, events: [] };
     const valid = { name: 'idea.planning_requested', arguments: { project: 'invalid' }, delivery: { mode: 'webhook', url, secret } };
     const before = await f.db.prepare('SELECT count(*) AS n FROM subscriptions').first();

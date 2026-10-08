@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { planningFixture } from './fixture.mjs';
 const secret = 'whsec_' + Buffer.alloc(32, 9).toString('base64');
-const url = 'https://chatgpt.com/planning-fixture';
+const url = 'http://127.0.0.1:1/planning-fixture';
 const target = { secret, events: [], respond: () => new Response(null, {status:503}) };
 const callbacks={[url]:target};
 const f = await planningFixture({callbacks,engineHarness:true});
@@ -54,7 +54,7 @@ try {
   const exhaustedCount=target.events.length;
   await f.scheduled(); assert.equal(target.events.length,exhaustedCount,'Exhausted job stops automatic wakes');
   assert.equal((await job(id)).recovery_reason,'recovery_exhausted');
-  const lateAddress='https://chatgpt.com/late-after-exhaustion'; callbacks[lateAddress]={secret,events:[]};
+  const lateAddress='http://127.0.0.1:1/late-after-exhaustion'; callbacks[lateAddress]={secret,events:[]};
   await subscribe(lateAddress,'A'); await f.scheduled();
   assert.equal(callbacks[lateAddress].events.length,0,'New subscribers do not bypass exhausted automatic recovery');
   await f.rpc('claim_planning_job',{job_id:id});
@@ -68,7 +68,7 @@ try {
   console.log('PASS: no-subscription budget preservation and three-recovery exhaustion');
 
   const scenario=async (name,respond) => {
-    const address='https://chatgpt.com/'+name;
+    const address='http://127.0.0.1:1/'+name;
     const callback={secret,events:[],respond}; callbacks[address]=callback;
     await subscribe(address,name);
     const jid=await create(name,name);
@@ -127,7 +127,7 @@ try {
   const before=matching.callback.events.length;
   await create('Other project','Other'); await create('Other owner','scoping','bob');
   await f.scheduled(); assert.equal(matching.callback.events.length,before);
-  const secondAddress='https://openai.com/scoping-second'; callbacks[secondAddress]={secret,events:[],respond:()=>new Response(null,{status:400})};
+  const secondAddress='http://127.0.0.1:1/scoping-second'; callbacks[secondAddress]={secret,events:[],respond:()=>new Response(null,{status:400})};
   await subscribe(secondAddress,'scoping'); await f.scheduled();
   assert.equal((await deliveries(matching.jid)).length,2); assert.equal((await job(matching.jid)).delivery,'partial');
   assert.equal(matching.callback.events.length,before,'Backfill does not resend accepted targets');
@@ -164,7 +164,7 @@ try {
   const snapshot=await rows('SELECT * FROM jobs ORDER BY id');
   const visible=JSON.stringify((await f.rpc('list_planning_jobs',{})).result);
   const apiVisible=JSON.stringify((await f.request('/api/planning')).body);
-  for(const text of [visible,apiVisible]) for(const privateValue of [secret,planner.claim_token,'delivery_token','claim_token','https://chatgpt.com/']) assert.ok(!text.includes(privateValue));
+  for(const text of [visible,apiVisible]) for(const privateValue of [secret,planner.claim_token,'delivery_token','claim_token',f.callbackOrigin,'http://127.0.0.1:1/']) assert.ok(!text.includes(privateValue));
   assert.deepEqual(await rows('SELECT * FROM jobs ORDER BY id'),snapshot,'Read-only polling cannot mutate jobs');
   console.log('PASS: superseded/done suppression, atomic valid save, metadata privacy and readonly polling');
   const expiredSub=await scenario('expired-sub',()=>new Response(null,{status:503}));
@@ -210,7 +210,7 @@ try {
     await due(unsafe.jid); await f.scheduled();
     const stopped=(await deliveries(unsafe.jid))[0]; assert.equal(stopped.status,'failed');
     assert.equal(stopped.terminal_reason,kind==='oversized'?'event_too_large':'invalid_callback_or_secret');
-    assert.equal(unsafe.callback.events.length,1,'Unsafe callbacks/events never leave the Worker');
+    assert.equal(unsafe.callback.events.length,1,'Unsafe callbacks/events never leave the native server');
     // Isolate the deliberately malformed fixture from later backlog tests.
     await f.db.prepare('DELETE FROM subscriptions WHERE id=?').bind(d.subscription_id).run();
   }
@@ -218,7 +218,7 @@ try {
 
   const backlog=[];
   for(let n=0;n<53;n++) backlog.push(await create('Backlog '+n,'Backlog'));
-  const backlogAddress='https://chatgpt.com/backlog'; callbacks[backlogAddress]={secret,events:[]};
+  const backlogAddress='http://127.0.0.1:1/backlog'; callbacks[backlogAddress]={secret,events:[]};
   await subscribe(backlogAddress,'Backlog');
   let prior=callbacks[backlogAddress].events.length;
   assert.ok(prior<=20,'Subscription backfill outbound respects twenty-target cap');
@@ -271,7 +271,7 @@ try {
   assert.deepEqual(await f.engine('retry',complete.jid,doneJob.owner),doneJob);
   const acceptedJob=await job(concurrent.jid);
   assert.equal((await f.engine('retry',concurrent.jid,acceptedJob.owner)).generation,acceptedJob.generation,'Accepted events before wake deadline stay stable');
-  console.log('PASS: shared Worker metadata and manual CAS, cooldown, exhaustion reset, owner/current/done guards');
+  console.log('PASS: shared native metadata and manual CAS, cooldown, exhaustion reset, owner/current/done guards');
 
   const ordered=await scenario('due-order',()=>new Response(null,{status:204}));
   for(let n=0;n<20;n++) await create('Ordered '+n,'due-order');

@@ -1,6 +1,6 @@
 # 子项目一：连接、授权与安装
 
-状态：等待用户审阅；约束继承 workspace-loop-design。
+状态：用户已批准；约束继承 workspace-loop-design。
 
 ## 数据和权限
 

@@ -25,3 +25,6 @@ npm-debug.log*
 .superpowers/
 test-results/
 .local/
+build/connector/
+.agent-task-hub/
+/.codex/config.toml

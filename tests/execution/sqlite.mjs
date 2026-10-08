@@ -1,9 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { openDatabase } from '../../lib/database.mts';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Executes actual SQL; only the D1 wire interface is adapted.
+// Executes actual SQL; native migrations and transaction adapter are authoritative.
 export function sqliteAdapter(sqlite) {
   return {
     prepare(sql) {
@@ -36,16 +37,15 @@ export function sqliteAdapter(sqlite) {
 export function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'execution-sqlite-'));
   const path = join(directory, 'test.sqlite');
+  const db = openDatabase(path);
   const sqlite = new DatabaseSync(path);
-  for (const migration of readdirSync(new URL('../../drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
-    sqlite.exec(readFileSync(new URL(`../../drizzle/${migration}`, import.meta.url), 'utf8'));
-  }
-  t.after(() => { sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
+  sqlite.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON');
+  t.after(() => { sqlite.close(); db.close(); rmSync(directory, { recursive: true, force: true }); });
   const now = new Date(Date.now() - 1000).toISOString();
   const body = '{"title":"Frozen ticket","scope":"only declared operations","status":"todo"}';
   sqlite.prepare('INSERT INTO records VALUES (?,?,?,?,?,?,?)').run('ticket-1', 'owner-a', 'ticket', body, 1, now, now);
   sqlite.prepare('INSERT INTO records VALUES (?,?,?,?,?,?,?)').run('legacy-run', 'owner-a', 'run', '{"title":"Manual snapshot","source":"execution","contract":{"title":"Old"}}', 1, now, now);
-  return { db: sqliteAdapter(sqlite), sqlite, body, path };
+  return { db, sqlite, body, path };
 }
 
 export const context = { owner: 'owner-a', actor: 'actor-a' };

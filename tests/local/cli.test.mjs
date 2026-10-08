@@ -1,3 +1,4 @@
+import {fixtureEnvironment} from './fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync,rmSync } from 'node:fs';
@@ -8,7 +9,7 @@ import { openDatabase } from '../../lib/database.mts';
 import { login,validateToken } from '../../lib/local-auth.mts';
 test('account CLI uses stdin secrets and rejects password arguments',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'hub-cli-'));const file=join(dir,'data.sqlite');let db;
- const cli=(args,input='')=>spawnSync(process.execPath,['--experimental-strip-types','scripts/accounts.mjs',...args],{input,encoding:'utf8',env:{...process.env,APP_DB_PATH:file}});
+ const cli=(args,input='')=>spawnSync(process.execPath,['--experimental-strip-types','scripts/accounts.mjs',...args],{input,encoding:'utf8',env:{...fixtureEnvironment(),APP_DB_PATH:file}});
  try{
  const created=cli(['create','alice','Alice'],'synthetic-password\n');assert.equal(created.status,0,created.stderr);assert.ok(!created.stdout.includes('synthetic-password'));
  assert.notEqual(cli(['create','bob','Bob','--password','secret']).status,0);

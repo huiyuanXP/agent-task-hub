@@ -2,6 +2,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { PlanningStatus, planningControls } from "../components/planning-status";
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
+import { ConnectionPanel } from "../components/connectors/connection-panel";
+import { DevelopmentPanel } from "../components/workspace-runs/development-panel";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
@@ -395,7 +397,7 @@ export default function Home() {
     board: "从待开始到已完成，跟进每一步。",
     review: "集中处理澄清、授权、验收和外部依赖。",
     runs: "保留执行时的任务版本与验收证据。",
-    integrations: "查看当前能力与尚未接通的环节。",
+    integrations: "安装 MCP、关联 workspace，查看真实连接与 Agent 状态。",
   };
   function field(
     label: string,
@@ -897,10 +899,22 @@ export default function Home() {
                 </div>
               )}
               {view === "board" && (
+                <details className="workspace-section" open>
+                <summary>固定 Docker 操作与独立执行授权</summary>
                 <AuthorizationPanel
                   key={session?.user.userId ?? "anonymous"}
                   tickets={tickets}
                   onAuthenticationDenied={panelAuthenticationDenied}
+                />
+                </details>
+              )}
+              {["board", "review", "runs"].includes(view) && (
+                <DevelopmentPanel
+                  key={session?.user.userId ?? "anonymous"}
+                  tickets={tickets}
+                  project={project}
+                  onAuthenticationDenied={panelAuthenticationDenied}
+                  onRecordsChanged={() => void load(true)}
                 />
               )}
               {view === "board" && (
@@ -1005,38 +1019,11 @@ export default function Home() {
                   </div>
                 )}
               {view === "integrations" && (
-                <div className="integration-grid">
-                  {[
-                    [
-                      "本地工作区",
-                      "已启用",
-                      "点子、Plan、Ticket 和执行记录保存到本地；修订冲突会阻止覆盖。",
-                    ],
-                    [
-                      "本地规划消费者 / MCP Events",
-                      planning.subscriptions > 0 ? "已订阅" : "待连接消费者",
-                      planning.subscriptions > 0
-                        ? "点子保存后发送事件，订阅此事件的本地规划消费者 读取原文、生成 Plan 和 Tickets 并回写。"
-                        : "本地消费者通过 MCP 订阅点子规划事件后接收签名回调；未投递的请求持久保存，可手动重试。",
-                    ],
-                    [
-                      "本地 Runner",
-                      "查看授权面板",
-                      "已批准的登记操作可通过执行授权面板启动；后端连接和实际结果以该面板为准。手动记录不代表进程执行。",
-                    ],
-                  ].map(([a, b, c]) => (
-                    <article className="idea-card" key={a}>
-                      <Plug size={22} />
-                      <h3>{a}</h3>
-                      <span
-                        className={"connection " + (b === "已启用" ? "on" : "")}
-                      >
-                        {b}
-                      </span>
-                      <p>{c}</p>
-                    </article>
-                  ))}
-                </div>
+                <ConnectionPanel
+                  key={session?.user.userId ?? "anonymous"}
+                  projects={projects}
+                  onAuthenticationDenied={panelAuthenticationDenied}
+                />
               )}
             </>
           )}
@@ -1045,8 +1032,8 @@ export default function Home() {
             <span>
               每 10 秒自动刷新 ·{" "}
               {planning.subscriptions > 0
-                ? "Agent 事件已订阅 · 执行连接见授权面板"
-                : "Agent 待订阅 · 执行连接见授权面板"}
+                ? "规划事件已订阅 · MCP 与 Agent 状态见连接与执行"
+                : "MCP 与 Agent 状态见连接与执行"}
             </span>
           </footer>
         </main>

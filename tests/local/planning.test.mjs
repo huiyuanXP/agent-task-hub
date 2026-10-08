@@ -1,3 +1,4 @@
+import {fixtureEnvironment} from './fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -105,7 +106,7 @@ test('independent Node processes share delivery leases and a killed process reco
   const {spawn}=await import('node:child_process');const {once}=await import('node:events');
   const {db,file,target,delivery}=await fixture(t);await seedJob(db,'alice');await seedSubscription(db,'alice',target.url);await discoverDeliveries(db);
   const children=[];
-  const launch=()=>{const child=spawn(process.execPath,['--experimental-strip-types','tests/local/planner-child.mjs',file],{stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);children.push(child);return {child,done:once(child,'exit').then(([code])=>{assert.equal(code,0,output);})};};
+  const launch=()=>{const child=spawn(process.execPath,['--experimental-strip-types','tests/local/planner-child.mjs',file],{env:fixtureEnvironment(),stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);children.push(child);return {child,done:once(child,'exit').then(([code])=>{assert.equal(code,0,output);})};};
   t.after(async()=>{for(const child of children)if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit');}});
   let release;target.pause=new Promise(resolve=>{release=resolve;});t.after(()=>release());
   const first=launch();first.done.catch(()=>{});await waitFor(()=>target.events.length===1);

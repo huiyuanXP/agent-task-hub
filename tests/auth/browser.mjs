@@ -1,76 +1,74 @@
-// Test-only loopback ingress translates the browser origin to the configured
-// HTTPS application origin. Every session/data response comes from the real
-// built Worker, D1, and JOSE verifier. No live Access tenant or DNS is contacted.
+// Real Next responses delayed at an owned loopback ingress to exercise browser races.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { Miniflare } from 'miniflare';
-import { generateKeyPair, exportJWK, SignJWT } from 'jose';
+import { randomBytes } from 'node:crypto';
+import { localFixture } from '../local/fixture.mjs';
+import { issueToken } from '../../lib/local-auth.mts';
 import { chromium } from '../browser/node_modules/playwright/index.mjs';
 import { launchRestrictedBrowser } from '../browser/network.mjs';
-const origin = 'https://hub.example.test', issuer = 'https://browser-team.cloudflareaccess.com', audience = 'b'.repeat(64);
-const { privateKey, publicKey } = await generateKeyPair('RS256');
-const jwk = { ...await exportJWK(publicKey), kid: 'browser', alg: 'RS256', use: 'sig' };
-const token = (sub, seconds = 600) => new SignJWT({ type: 'app', email: `${sub}@example.test`, name: `${sub === 'alice' ? 'Alice' : 'Bob'} Member` }).setProtectedHeader({ alg: 'RS256', kid: 'browser', typ: 'JWT' }).setIssuer(issuer).setAudience(audience).setSubject(sub).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + seconds).sign(privateKey);
-const alice = await token('alice'), bob = await token('bob'), outsider = await token('outsider');
-let current = alice, denyPath, deniedToken, hold = false, releaseHeld, heldCount = 0, restricted, worker, base;
+const f=await localFixture({aliceName:'Alice Member',bobName:'Bob Member'}),origin=f.origin;
+const token=async(sub,seconds=600)=>sub==='outsider'?randomBytes(32).toString('base64url'):(await issueToken(f.db,f[sub].userId,{kind:'browser',ttlSeconds:Math.max(60,seconds),now:Date.now()-Math.max(0,60-seconds)*1000})).token;
+const alice=await token('alice'),bob=await token('bob'),outsider=await token('outsider');
+let current = alice, denyPath, deniedToken, hold = false, releaseHeld, heldCount = 0, restricted, base;
 const errors = [], outbound = [], requests = [];
-const temporary = mkdtempSync(join(tmpdir(), 'auth-browser-'));
-let holdGate, panelFault;
+let holdGroup, panelFault, requestSequence = 0;
+const holdGroups = new Set();
 let holdPaths = ['/api/records', '/api/planning'];
 function holdResponses(paths) {
   holdPaths = paths; heldCount = 0;
-  holdGate = new Promise(resolve => { releaseHeld = resolve; }); hold = true;
+  const group = { responses: [] };
+  group.gate = new Promise(resolve => { group.release = () => { resolve(); holdGroups.delete(group); }; });
+  holdGroup = group; holdGroups.add(group); releaseHeld = group.release; hold = true;
 }
+function releaseAllHeld() { for (const group of [...holdGroups]) group.release(); }
 async function waitForHeld(count) {
   const deadline = Date.now() + 5000;
   while (heldCount < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(heldCount >= count, 'Real Worker responses reached the delayed ingress boundary');
+  assert.ok(heldCount >= count, 'Real Next responses reached the delayed ingress boundary');
+}
+async function waitForHeldResponse(predicate) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const response = holdGroup.responses.find(predicate);
+    if (response) return response;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('The exact requested real Next response reached the delayed ingress boundary');
 }
 const facade = createServer(async (req, res) => {
   try {
-    const url = new URL(req.url, origin), path = url.pathname;
+    const url = new URL(req.url, origin), path = url.pathname, requestId = ++requestSequence, startedAt = Date.now();
     const panelDenied = panelFault && panelFault.path === path && panelFault.method === req.method && (!panelFault.query || url.searchParams.has(panelFault.query));
     requests.push({ path, method: req.method });
-    if (path === '/cdn-cgi/access/logout') {
-      // Provider-owned redirect terminus only; local revocation is checked below.
-      res.end('Synthetic provider logout boundary'); return;
-    }
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const headers = new Headers(req.headers);
     headers.delete('host'); headers.delete('authorization'); headers.delete('cookie');
-    headers.set('cf-access-jwt-assertion', panelDenied && panelFault.status === 401 ? outsider : path === '/api/records' && deniedToken ? deniedToken : current);
+    headers.set('cookie', 'hub_session='+(panelDenied && panelFault.status === 401 ? outsider : path === '/api/records' && deniedToken ? deniedToken : current));
     if (headers.get('origin') === base) headers.set('origin', origin);
-    const response = await worker.dispatchFetch((denyPath === path || panelDenied && panelFault.status === 403 ? 'https://alternate.example.test' : origin) + req.url, {
+    if(denyPath===path||panelDenied&&panelFault.status===403)headers.set('origin','https://foreign.invalid');
+    const response = await fetch(origin + req.url, {
       method: req.method, headers, redirect: 'manual', ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
     });
     const body = Buffer.from(await response.arrayBuffer());
-    if (hold && holdPaths.includes(path)) { heldCount++; await holdGate; }
+    if (hold && holdPaths.includes(path)) {
+      const group = holdGroup, captured = { requestId, path, status: response.status, startedAt, verifiedAt: Date.now() };
+      const individual = new Promise(resolve => { captured.release = resolve; });
+      group.responses.push(captured); heldCount++;
+      await Promise.race([group.gate, individual]);
+    }
     const outgoing = Object.fromEntries(response.headers);
+    outgoing['x-auth-fixture-request-id'] = String(requestId);
     delete outgoing['content-encoding']; delete outgoing['content-length'];
     if (outgoing.location?.startsWith(origin)) outgoing.location = base + outgoing.location.slice(origin.length);
     res.writeHead(response.status, outgoing); res.end(body);
   } catch (error) { errors.push(String(error)); res.writeHead(500); res.end('Fixture failed'); }
 });
 async function api(path, jwt = current, body) {
-  const response = await worker.dispatchFetch(origin + path, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + jwt, origin, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const response = await fetch(origin + path, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + (jwt===alice?f.aliceToken:jwt===bob?f.bobToken:jwt), origin, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
   assert.ok(response.ok, `${path}: ${response.status}`); return response.json();
 }
 try {
-  const config = JSON.parse(readFileSync('dist/server/wrangler.json', 'utf8'));
-  worker = new Miniflare({ host: '127.0.0.1', port: 0, modulesRoot: 'dist/server',
-    modules: [config.main, ...readdirSync('dist/server', { recursive: true }).filter(path => /\.m?js$/.test(path) && path !== config.main)].map(path => ({ type: 'ESModule', path: join('dist/server', path) })),
-    compatibilityDate: config.compatibility_date, compatibilityFlags: config.compatibility_flags,
-    bindings: { ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUDIENCE: audience, ACCESS_APPLICATION_ORIGIN: origin, ACCESS_ALLOWED_EMAILS: '["alice@example.test","bob@example.test"]' },
-    d1Databases: { DB: '00000000-0000-4000-8000-000000000000' }, d1Persist: join(temporary, 'd1'),
-    assets: { directory: 'dist/client', binding: 'ASSETS', routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: false } },
-    outboundService: request => { outbound.push(request.url); return request.url === issuer + '/cdn-cgi/access/certs' ? Response.json({ keys: [jwk] }) : new Response('Denied', { status: 403 }); },
-  });
-  await worker.ready;
-  const db = await worker.getD1Database('DB');
-  for (const migration of readdirSync('drizzle').filter(name => name.endsWith('.sql')).sort()) for (const sql of readFileSync(join('drizzle', migration), 'utf8').split('--> statement-breakpoint').filter(sql => sql.trim())) await db.prepare(sql).run();
+  const db=f.db;
   const idea = await api('/api/records', alice, { kind: 'idea', title: 'Alice private idea', text: 'Private body', project: 'Alice project' });
   await api('/api/planning', alice, { ideaId: idea.id });
   await api('/api/records', bob, { kind: 'idea', title: 'Bob private idea' });
@@ -107,7 +105,7 @@ try {
     assert.deepEqual(await snapshot.jsonValue(), { dialogs: 0, capture: '', account: null, aliceIdea: 0, inbox: '点子收件箱0', project: '全部项目' });
     await snapshot.dispose();
   };
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
   await visibleAlice();
   assert.equal(await page.getByLabel('账户缩写').innerText(), 'AM');
   assert.equal(await page.getByText('本地开发身份').count(), 0);
@@ -126,10 +124,10 @@ try {
   assert.equal(await page.getByText('Alice private idea', { exact: true }).count(), 0);
   console.log('PASS: account switch discards old rows and unsaved private state');
   current = alice; await refresh(); await visibleAlice();
-  await db.prepare('ALTER TABLE auth_revocations RENAME TO unavailable_revocations').run();
-  await refresh(); await page.getByRole('alert').waitFor(); await visibleAlice();
+  await db.prepare('ALTER TABLE local_tokens RENAME TO unavailable_tokens').run();
+  await refresh(); await page.locator('.alert[role="alert"]').waitFor(); await visibleAlice();
   assert.equal(await page.getByRole('link', { name: '登录', exact: true }).count(), 0);
-  await db.prepare('ALTER TABLE unavailable_revocations RENAME TO auth_revocations').run();
+  await db.prepare('ALTER TABLE unavailable_tokens RENAME TO local_tokens').run();
   console.log('PASS: real storage 503 keeps identity distinct from expired authentication');
   await privateDraft(); current = await token('outsider');
   await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await cleared();
@@ -225,31 +223,44 @@ try {
     // a newly authenticated periodic refresh. Also exercise an older session
     // request that was verified before denial but has not reached the browser.
     holdResponses(['/api/session']);
-    let staleSession;
+    let staleSession, staleResponse;
     if (status === 401) {
-      staleSession = page.waitForResponse(r => new URL(r.url()).pathname === '/api/session');
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await waitForHeld(1);
+      staleResponse = holdGroup.responses.find(r => r.path === '/api/session' && r.status === 200);
+      assert.ok(staleResponse, 'Capture the successful session verified before the denied write');
+      staleSession = page.waitForResponse(r => r.headers()['x-auth-fixture-request-id'] === String(staleResponse.requestId));
     }
+    const beforeWrite = Date.now();
     const deniedWrite = panelDenial(); await panel.getByRole('button', { name: button }).click();
-    await deniedWrite; await assertPanelCleared(); panelFault = undefined;
+    const deniedResponse = await deniedWrite; await assertPanelCleared(); panelFault = undefined;
     console.log(`PASS: ${button} write denial clears workspace before response-body processing`);
     if (staleSession) {
-      const releaseStale = releaseHeld;
+      assert.ok(staleResponse.verifiedAt <= beforeWrite, 'Released session was verified before the denied write began');
+      assert.ok(staleResponse.requestId < Number(deniedResponse.headers()['x-auth-fixture-request-id']), 'Released session request predates the denied write');
+      const capturedGroup = holdGroup;
       holdResponses(['/api/session']); // Any later refresh remains separate.
-      releaseStale();
+      // Release only the captured verified response. Periodic refreshes verified
+      // after the denial may also have reached the old group and must stay held.
+      staleResponse.release();
       assert.equal((await staleSession).status(), 200);
       // Allow fetch continuations and React's render to run, without a sleep.
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await assertPanelCleared();
+      console.log('AUTH_SESSION_RACE_EVIDENCE ' + JSON.stringify({ stale: { requestId: staleResponse.requestId, startedAt: staleResponse.startedAt, verifiedAt: staleResponse.verifiedAt }, deniedRequestId: Number(deniedResponse.headers()['x-auth-fixture-request-id']), separatelyHeldSessions: capturedGroup.responses.filter(r => r !== staleResponse).map(({ requestId, startedAt, verifiedAt }) => ({ requestId, startedAt, verifiedAt })) }));
       console.log('PASS: pre-denial verified session response cannot restore identity or execution cache');
-      const newSession = page.waitForResponse(r => new URL(r.url()).pathname === '/api/session');
+      holdResponses(['/api/session']);
+      const beforeFreshRequest = requestSequence;
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-      await waitForHeld(1); hold = false; releaseHeld();
+      const freshResponse = await waitForHeldResponse(r => r.path === '/api/session' && r.status === 200 && r.requestId > beforeFreshRequest);
+      assert.ok(freshResponse, 'Capture an independently initiated successful session after the denial');
+      const newSession = page.waitForResponse(r => r.headers()['x-auth-fixture-request-id'] === String(freshResponse.requestId));
+      hold = false; freshResponse.release();
       assert.equal((await newSession).status(), 200);
       await visibleAlice();
       assert.equal(await panel.count(), 0);
       assert.equal(await page.getByText(prepared.run.id, { exact: false }).count(), 0);
+      releaseAllHeld();
       console.log('PASS: newly initiated verified session restores identity without old execution cache');
     } else { hold = false; releaseHeld(); }
   }
@@ -288,24 +299,24 @@ try {
   await page.waitForLoadState('networkidle'); await cleared();
   console.log('PASS: deadline expires without refresh and delayed successful responses cannot restore private state');
   current = alice; await refresh(); await visibleAlice();
-  const logout = page.waitForResponse(r => r.url() === base + '/signout-with-chatgpt' && r.request().method() === 'POST');
+  const logout = page.waitForResponse(r => r.url() === base + '/api/auth/logout' && r.request().method() === 'POST');
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   assert.equal((await logout).status(), 303);
-  await page.waitForURL(base + '/cdn-cgi/access/logout');
-  const replay = await worker.dispatchFetch(origin + '/api/session', { headers: { authorization: 'Bearer ' + alice } });
+  await page.waitForURL(base + '/signin');
+  const replay = await fetch(origin + '/api/session', { headers: { cookie: 'hub_session=' + alice } });
   assert.equal(replay.status, 401); await replay.text();
   console.log('PASS: actual same-origin POST logout immediately revokes the browser token');
   await restricted.flushNetworkEvidence();
   const evidence = JSON.stringify({
     pageErrors: errors, requestedExternalOrigins: restricted.requestedExternal,
     blockedExternalRequests: restricted.blocked, networkPolicyErrors: restricted.errors,
-    syntheticJwksRequests: outbound,
+    unexpectedOutboundRequests: outbound,
   });
   assert.ok(Buffer.byteLength(evidence) <= 64 * 1024, 'Synthetic auth browser evidence exceeds its bound');
   console.log('VERIFIED_AUTH_BROWSER_EVIDENCE ' + evidence);
   assert.deepEqual(errors, []); assert.deepEqual(restricted.errors, []);
-  assert.ok(restricted.requestedExternal.every(url => url === 'https://fonts.googleapis.com'), 'Unexpected external application request');
-  assert.ok(outbound.every(url => url === issuer + '/cdn-cgi/access/certs'));
+  assert.deepEqual(restricted.requestedExternal,[], 'External application requests');
+  assert.deepEqual(outbound,[]);
   assert.ok(requests.some(r => r.path === '/api/session'));
   console.log('PASS: no page errors or unexpected outbound requests');
 } finally {
@@ -313,7 +324,7 @@ try {
     await restricted.flushNetworkEvidence();
     console.log('AUTH_BROWSER_FINAL_NETWORK_EVIDENCE ' + JSON.stringify({ blockedExternalRequests: restricted.blocked, requestedExternalOrigins: restricted.requestedExternal, networkPolicyErrors: restricted.errors }));
   }
-  hold = false; releaseHeld?.(); await restricted?.close();
+  hold = false; releaseAllHeld(); await restricted?.close();
   facade.closeAllConnections(); if (facade.listening) await new Promise(resolve => facade.close(resolve));
-  await worker?.dispose(); rmSync(temporary, { recursive: true, force: true });
+  await f.close();
 }

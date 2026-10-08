@@ -58,7 +58,7 @@ export function PlanningStatus({ job, now }: { job: PlanningView; now: number })
           : job.delivery === "accepted"
             ? "请求已送达 · 等待 Agent 处理"
             : job.delivery === "no_subscription"
-              ? "已排队 · 待连接插件"
+              ? "已排队 · 等待项目 Agent"
               : job.delivery === "failed"
                 ? "投递失败 · 可恢复"
                 : job.delivery === "retrying"
@@ -67,6 +67,8 @@ export function PlanningStatus({ job, now }: { job: PlanningView; now: number })
   return (
     <div className="planning-status" aria-live="polite">
       <div>{text}</div>
+      {job.planner_error && <div>Agent 错误：{job.planner_error}</div>}
+      {(job.planner_retry_at ?? 0) > now && <div>Agent 重试冷却：剩余 {Math.ceil((job.planner_retry_at! - now) / 1000)} 秒</div>}
       {active && job.lease_expires != null && (
         <div>
           租约到期：{deadline(job.lease_expires)} · 剩余 {Math.ceil((job.lease_expires - now) / 1000)} 秒

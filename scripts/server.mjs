@@ -43,14 +43,14 @@ const server = createServer(async (req, res) => {
       if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(',') : value);
     }
 
-    // Checkpoints authenticate their separate signed service principal in-route.
-    // Every owner API/MCP request crosses the local credential boundary here.
-    const service = url.pathname === '/api/execution/checkpoint';
+    // These exact machine endpoints authenticate their own credentials in-route.
+    const service = new Set(['/api/execution/checkpoint','/api/connector/enroll','/api/connector/heartbeat','/api/connector/mcp','/api/connector/agent']).has(url.pathname);
+    const publicDownload = url.pathname === '/api/connectors/download' && ['GET','HEAD'].includes(req.method ?? 'GET');
     if (!service) {
       const protectedRoute =
         (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/')) ||
         url.pathname === '/mcp';
-      if (protectedRoute) {
+      if (protectedRoute && !publicDownload) {
         const session = await authenticateHeaders(db, headers, req.method ?? 'GET', origin);
         if (!session) throw new AuthError(401, 'Authentication required');
       } else {

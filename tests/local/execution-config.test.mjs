@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {fixtureEnvironment} from './fixture.mjs';
+import {stopChild} from '../harness.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
@@ -12,9 +14,9 @@ test('native control server loads private provisioned configuration for the inde
  const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));
  const origin=`http://127.0.0.1:${port}`,target=join(root,'keys');
  const provision=spawnSync(process.execPath,['--experimental-strip-types','scripts/provision-execution.mjs',target,origin,'http://127.0.0.1:4210'],{encoding:'utf8'});assert.equal(provision.status,0,provision.stderr);
- const child=spawn(process.execPath,['--experimental-strip-types','scripts/server.mjs','--execution-config',join(target,'control.json'),'--port',String(port)],{env:{...process.env,APP_DB_PATH:join(root,'data.sqlite'),APP_ORIGIN:origin,APP_SCHEDULER_INTERVAL_MS:'0'},stdio:['ignore','pipe','pipe']});
+ const child=spawn(process.execPath,['--experimental-strip-types','scripts/server.mjs','--execution-config',join(target,'control.json'),'--port',String(port)],{detached:true,env:{...fixtureEnvironment(),APP_HOST:'127.0.0.1',APP_DB_PATH:join(root,'data.sqlite'),APP_ORIGIN:origin,APP_SCHEDULER_INTERVAL_MS:'0'},stdio:['ignore','pipe','pipe']});
  let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);
- t.after(async()=>{if(child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}});
+ const record={child,done:new Promise(resolve=>child.once('close',resolve))};t.after(()=>stopChild(record));
  let ready=false;
  for(let n=0;n<120;n++){if(child.exitCode!==null)assert.fail(output);try{if((await fetch(origin+'/api/session')).status===401){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}
  assert.ok(ready,output);
@@ -32,6 +34,6 @@ test('native control server loads private provisioned configuration for the inde
 test('malformed private control configuration fails startup before opening SQLite',async t=>{
  const root=await mkdtemp(join(tmpdir(),'hub-invalid-config-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const file=join(root,'control.json');await writeFile(file,JSON.stringify({APP_DB_PATH:'/should-never-be-loaded'}),{mode:0o600});
- const result=spawnSync(process.execPath,['--experimental-strip-types','scripts/server.mjs','--execution-config',file],{env:{...process.env,APP_DB_PATH:join(root,'unopened.sqlite')},encoding:'utf8'});assert.notEqual(result.status,0);
+ const result=spawnSync(process.execPath,['--experimental-strip-types','scripts/server.mjs','--execution-config',file],{detached:true,env:{...fixtureEnvironment(),APP_HOST:'127.0.0.1',APP_DB_PATH:join(root,'unopened.sqlite')},encoding:'utf8'});assert.notEqual(result.status,0);
  const {stat}=await import('node:fs/promises');await assert.rejects(stat(join(root,'unopened.sqlite')),{code:'ENOENT'});
 });
