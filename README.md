@@ -27,6 +27,7 @@ npm start
 - [规划与修订](docs/PLANNING.md)
 - [详情页字段映射与页面结构](docs/DETAIL-PAGES.md)
 - [执行和验收](docs/EXECUTION.md)
+- [Ticket 看板交互设计与动作矩阵](docs/BOARD-INTERACTIONS.md)
 - [原生执行接口衔接评估](docs/EXECUTION-INTEGRATION.md)
 - [固定 Docker Runner](docs/RUNNER.md)
 - [实际功能清单](docs/FEATURES.md)
