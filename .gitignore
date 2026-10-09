@@ -29,3 +29,4 @@ build/connector/
 .agent-task-hub/
 /.codex/config.toml
 .wrangler/
+/tools

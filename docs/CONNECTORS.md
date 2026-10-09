@@ -24,6 +24,19 @@ MCP 使用 STDIO JSON-RPC；stdout 仅传输协议，日志写 stderr。其他 M
 
 工坊自己的仓库也可用相同方式关联为一个 workspace；项目绑定名必须与点子/Ticket 的项目一致。不要把没有关联仓库的普通项目当成已经具备开发执行能力。
 
+本机工坊仓库的已安装连接位于 `/home/agent/projects/agent-task-hub/.agent-task-hub/`，
+绑定项目为“通用”。在主开发目录执行以下命令使用现有身份：
+
+```sh
+.local/tools/node-v22.23.3-linux-x64/bin/node .agent-task-hub/runtime/1.0.0/cli.mjs mcp --workspace /home/agent/projects/agent-task-hub
+.local/tools/node-v22.23.3-linux-x64/bin/node .agent-task-hub/runtime/1.0.0/cli.mjs agent --workspace /home/agent/projects/agent-task-hub
+```
+
+MCP 的 `list_tickets`、`get_ticket` 和 `get_plan` 用于读取任务及其合同；常驻
+Agent 通过项目客户端执行接口领取已批准的 Run。移动已安装 workspace 时，
+保留连接凭据，统一更新 `connection.json` 的 `workspace`、`file`、`runtime`
+与 `.codex/config.toml` 的 command、args、cwd，再复用 install 命令刷新运行文件。
+
 ## 本机 Codex 配置与 Profile
 
 客户端默认继承本机 Codex 的默认模型、provider 和认证配置，不要求已有 API 网关用户重新 Device 登录。使用 --profile mimo 或 --profile oneapi 可以选择本机已有的配置文件；具体名称及模型以安装机器的实际配置为准。

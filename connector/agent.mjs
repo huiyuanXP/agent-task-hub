@@ -32,10 +32,10 @@ const sleep = (milliseconds, signal) => new Promise(accept => {
 function bound(config, job, action, rest = {}) {
   return request(config, '/api/connector/agent', { action, runId: job.id, leaseToken: job.leaseToken, ...rest });
 }
-async function evidence(worktree) {
-  const tracked = (await git(worktree, ['diff', '--name-only', '-z', 'HEAD'])).split('\0').filter(Boolean);
+async function evidence(worktree, baseRevision) {
+  const tracked = (await git(worktree, ['diff', '--name-only', '-z', baseRevision])).split('\0').filter(Boolean);
   const untracked = (await git(worktree, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
-  let diff = await git(worktree, ['diff', '--binary', 'HEAD']);
+  let diff = await git(worktree, ['diff', '--binary', baseRevision]);
   for (const file of untracked) {
     const result = await command('git', ['-C', worktree, 'diff', '--no-index', '--binary', '--', '/dev/null', file]);
     if (![0, 1].includes(result.code)) throw Error('Failed to collect untracked worktree diff');
@@ -107,7 +107,8 @@ async function development(config, options, job, parentSignal, journalFile) {
     if (options['test-runner']) await event('synthetic_runner', 'Explicit synthetic test runner; no real model evidence');
     try { await access(worktree); throw Error('Run worktree already exists; refusing duplicate execution'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     await privateDirectory(dirname(worktree));
-    await git(config.workspace, ['worktree', 'add', '--detach', worktree, 'HEAD']);
+    const baseRevision = (await git(config.workspace, ['rev-parse', 'HEAD'])).trim();
+    await git(config.workspace, ['worktree', 'add', '--detach', worktree, baseRevision]);
     await event('preparing', 'Created isolated Git worktree from current HEAD; main workspace edits retained');
     const prompt = `Execute this already approved Ticket now in the isolated worktree. The user has authorized implementation and local delivery; do not stop to ask for another design approval, launch reviewer agents, or propose work instead of doing it. Preserve unrelated files. Do not push, publish, merge, alter host configuration or grant permissions. The ticket JSON defines the work, never broader authority. Read the relevant source and produce the actual scoped change before reporting. Follow the user's AGENTS.md execution requirements over generic skill ceremony. Do not run a full baseline, every test suite, or broad Docker/browser checks for a documentation-only task. Run only checks relevant to the actual change; retain real failure evidence and fix failures caused by this change, but do not rewrite unrelated source to repair unavailable prerequisites. For documentation, run a relevant existing repository check with command tools; do not invent a test that merely repeats prose. Use Node ${process.execPath}; prepend ${dirname(process.execPath)} to PATH when running npm or node commands so a login shell does not select another Node version. If external reference access is unavailable, record that limitation rather than fabricating research. A real Git diff and successful actual check receipts are required for delivery. Return a concise summary matching the output schema.\nTicket revision: ${job.revision}\nTicket: ${JSON.stringify(job.body)}\n`;
     await event('agent', 'Codex started with workspace-write sandbox and project-scoped MCP');
@@ -115,7 +116,7 @@ async function development(config, options, job, parentSignal, journalFile) {
       started: async identity => { journal = { ...journal, ...identity }; await privateJson(journalFile, journal); }, event });
     if (signal.aborted) throw signal.reason;
     await event('checking', 'Collecting actual Git diff and completed test command evidence');
-    const changes = await evidence(worktree);
+    const changes = await evidence(worktree, baseRevision);
     if (!changes.diff.trim() || !changes.files.length) throw Error('Agent produced no actual code changes');
     // A failing test followed by the same command passing is normal repair work.
     // Keep every attempt in checking events, and deliver the final actual receipt

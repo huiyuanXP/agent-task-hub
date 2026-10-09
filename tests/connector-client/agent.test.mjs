@@ -123,6 +123,28 @@ test('synthetic model process produces real Git worktree diff and actual test re
   assert.ok(!args.some(argument => argument.includes('dangerously')));
   assert.equal(item.requests.filter(request => request.body.action === 'complete').length, 1);
 });
+test('committed Ticket changes and untracked files are delivered against the initial worktree revision', async t => {
+  const item = await setup(t);
+  const base = await run('git', ['-C', item.directory, 'rev-parse', 'HEAD']);
+  const commit = `const staged=spawnSync('git',['add','README.md','change.test.mjs'],{cwd,encoding:'utf8'});
+if(staged.status!==0) throw Error(staged.stderr);
+const committed=spawnSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-m','Scoped Ticket change'],{cwd,encoding:'utf8'});
+if(committed.status!==0) throw Error(committed.stderr);
+writeFileSync(join(cwd,'delivery.txt'),'untracked delivery evidence\\n');
+`;
+  await writeFile(item.runner, syntheticSource.replace(" writeFileSync(output,JSON.stringify({summary:", commit + " writeFileSync(output,JSON.stringify({summary:"));
+  const result = await run(process.execPath, [cli, 'agent', '--config', item.config, '--test-runner', item.runner, '--once']);
+  assert.equal(result.code, 0, result.stderr);
+  const complete = item.requests.find(request => request.body.action === 'complete');
+  assert.ok(complete, result.stderr);
+  assert.match(complete.body.result.diff, /actual isolated change/);
+  assert.match(complete.body.result.diff, /untracked delivery evidence/);
+  for (const file of ['README.md', 'change.test.mjs', 'delivery.txt']) assert.ok(complete.body.result.files.includes(file), file);
+  assert.equal(complete.body.result.tests[0].exitCode, 0);
+  assert.match(complete.body.result.tests[0].output, /pass 1/);
+  assert.equal((await run('git', ['-C', item.directory, 'rev-parse', 'HEAD'])).stdout, base.stdout);
+  assert.notEqual((await run('git', ['-C', complete.body.result.worktree, 'rev-parse', 'HEAD'])).stdout, base.stdout);
+});
 test('current Codex shell-wrapped test can fail then pass while delivering only its final actual receipt', async t => {
   const item = await setup(t);
   const wrappedCommand = "/usr/bin/zsh -lc 'node --test change.test.mjs'";

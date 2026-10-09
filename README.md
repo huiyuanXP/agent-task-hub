@@ -2,6 +2,10 @@
 
 本机任务工作区：点子 → Plan → Tickets → 批准开发 → Agent 执行 → 结果与验收。支持按项目安装 MCP/CLI，后台查看注册客户端及常驻 Agent 的通信状态。
 
+本机主开发目录为 `/home/agent/projects/agent-task-hub`，使用 `main` 分支。
+数据库与运行资料保存在 `.local/`，已安装的 MCP 客户端位于 `.agent-task-hub/`。
+项目 `.codex/config.toml` 提供 `agent_task_hub` 连接；具体启动与收尾步骤见[本机部署](docs/DEPLOYMENT.md)。
+
 使用 Node.js 22.23.3 或更新版本，原生 Next.js/React 与本地 SQLite。保留 package-lock.json。
 
 ```sh

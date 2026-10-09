@@ -22,3 +22,20 @@ SQLite 使用 WAL、外键和追加的有序迁移，schema_migrations 跟踪已
 临时远程预览可以用 HTTPS 隧道连接 loopback 服务，并将 APP_ORIGIN 配置成该 HTTPS origin。Host/Origin 必须匹配；HTTPS 浏览器 cookie 使用 Secure。隧道地址变化时，更新服务 origin 和客户端 set-url 设置，保留数据库。
 
 停止进程会先关闭 HTTP 与维护定时器，再关闭数据库。升级先停止旧服务、构建、再启动，避免正在访问时改写共享 .next。客户端安装入口 /install；包下载 /api/connectors/download。
+
+## 本机开发目录与现有服务
+
+主开发目录为 `/home/agent/projects/agent-task-hub`，分支为 `main`。
+`/home/agent/work/agent-task-hub` 是指向主目录的兼容链接，共享同一份文件。
+当前服务数据库是 `.local/data.sqlite`，配置为 `.local/server.env`，日志为
+`.local/logs/server.log`；已有账户、Ticket、连接身份和执行历史保存在该数据库。
+
+```sh
+cd /home/agent/projects/agent-task-hub
+.local/tools/node-v22.23.3-linux-x64/bin/node --env-file=.local/server.env --experimental-strip-types scripts/server.mjs
+```
+
+上述命令用于服务停止后的启动；运行中的进程号保存在 `.local/server.pid`。
+私有工具安装在 `.local/tools/`，根目录 `tools` 链接用于兼容宿主会话的工具路径。
+`.local/evidence/` 保存验证资料、未提交测试修改与收尾凭证；历史项目材料以
+`workspace-materials-2026-10-09.tar.gz` 归档，开发以主目录源码为准。

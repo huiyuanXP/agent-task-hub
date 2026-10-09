@@ -2,12 +2,25 @@
 
 ## Project direction
 
-The project is changing from the first implementation—ChatGPT reading the project,
-creating plugins, Cloudflare hosting and OpenAI OAS/OAuth identity—to a fully local
-server deployment. Implement and document the local server as the sole application
-architecture. This paragraph is the only place to retain that direction-change
-context; remove the previous hosting/authentication setup from application code,
-configuration, tests and other documentation instead of marking it deprecated.
+Agent Task Hub is a fully local Node.js/Next.js application with persistent SQLite,
+local account sessions and project-scoped MCP connections. Implement and document
+this application architecture consistently across code, configuration and docs.
+
+## Canonical development workspace
+
+Use `/home/agent/projects/agent-task-hub` on the local `main` branch for development.
+`/home/agent/work/agent-task-hub` resolves to this same directory as a compatibility
+alias. The running server uses `.local/data.sqlite`; its environment and logs live
+in `.local/server.env` and `.local/logs/`. Installed project credentials, MCP runtime
+and current Run state live in `.agent-task-hub/`. Historical validation material
+and retained worktree changes are private archives in `.local/evidence/`.
+
+Read Tickets through the installed `agent_task_hub` MCP. Its connection belongs to
+the `通用` project. Run the installed CLI from the canonical workspace and use its
+existing connection identity. The Agent consumes approved Runs in temporary
+worktrees; integrate reviewed deliveries into `main`, retain their evidence and
+clean up their worktrees under the user's authorized scope. Finish each task with
+the global `neat-freak` skill and current documentation.
 
 ## Repository skills
 
@@ -77,4 +90,4 @@ histories. Read `docs/DEPLOYMENT.md`, `docs/AUTHENTICATION.md`, `docs/PLANNING.m
 复杂任务使用gpt-6.1-sol high/xhigh, 简单任务使用gpt-6.1-sol low, 简单但长程任务使用gpt-5.6-luna xhigh
 用户经常指派完成ticket/issue任务, 则先规划整体实现架构/衔接, 并使用subagent并行实行.
 
-本轮适用说明：用户已批准 2026-10-08 workspace-loop 设计和并行实现；用户约定优先于仓库技能中的串行实现或重复评审要求。功能测试与必要构建用于证明实际交付行为，不另设重复门禁。当前工具没有 gpt-5.6-luna，简单长程任务使用可用的 gpt-6.1-sol；不得声称调用不存在的模型。
+用户约定优先于仓库技能中的串行实现或重复评审要求。功能测试与必要构建用于证明实际交付行为，按实际变更选择必要检查。模型选择以用户偏好与当前工具支持为依据；替代模型时明确说明实际使用的模型。
