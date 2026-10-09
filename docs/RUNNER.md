@@ -21,3 +21,5 @@ Runner journal 保存 permit、真实 deadline、操作和后端状态。重启�
 日志与产物通过绑定许可的受限路径下载，不开放任意宿主文件。输入在固定句柄读取并按登记摘要复核，产物仅接收规定的相对路径、字节限额和类型。
 
 相关检查为 npm run test:execution:domain、npm run test:execution、npm run test:backend:integration。缺少真实 daemon 不应假装 Docker 检查通过；本机开发闭环检查不能替代固定容器隔离检查。
+
+Run 专属 Worker 与持久 consumer 的拟实施合同、原生账户/SQLite 接入和 permit 对账条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
