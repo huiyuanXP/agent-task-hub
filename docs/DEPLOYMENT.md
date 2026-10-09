@@ -36,6 +36,10 @@ cd /home/agent/projects/agent-task-hub
 ```
 
 上述命令用于服务停止后的启动；运行中的进程号保存在 `.local/server.pid`。
+常驻客户端的进程号保存在 `.local/agent.pid`，日志为 `.local/logs/agent.log`；
+它等待项目已批准的开发 Run，并保留待验收的交付结果。
 私有工具安装在 `.local/tools/`，根目录 `tools` 链接用于兼容宿主会话的工具路径。
 `.local/evidence/` 保存验证资料、未提交测试修改与收尾凭证；历史项目材料以
 `workspace-materials-2026-10-09.tar.gz` 归档，开发以主目录源码为准。
+已集成的 Ticket 交付 diff、文件及真实检查回执按 Run ID 保存在
+`.local/evidence/<run-id>/`，对应临时 worktree 在结果保留后清理。

@@ -21,6 +21,7 @@
 - “工坊验收 Test”连接 `81514e3d-54da-4571-abde-f0270a48adca` 的测试项目、三份未提交改动和验证资料保存在 `.local/evidence/workspace-materials-2026-10-09.tar.gz`，执行记录保留在数据库。
 - 主目录中的真实 STDIO MCP 读取到“通用”项目的 22 张 Ticket，其中 4 张完成，18 张进入后续处理范围。
 - 任务开始提交作为固定交付基准；客户端 13 项行为测试通过，覆盖模型自行提交修改与保留未跟踪文件的交付场景。
+- 详情信息分组 Ticket 的真实 CLI Run `cdff196e-1b42-4ef1-9bf7-6884e7c7afa2` 已交付为待验收，字段映射见 [DETAIL-PAGES.md](DETAIL-PAGES.md)；5 项现有针对性检查通过，结果已集成到 `main`，diff、文件和检查回执按 Run ID 保存在 `.local/evidence/`。
 - 用户两个点子通过工坊自身已安装的项目 MCP，由当前真实主控 Agent 领取并回写，各生成一个 Plan 和三个 Tickets。
 - 当前主控会话通过测试项目客户端领取一条已批准的 sum 修复 Ticket，委派真实 `gpt-6.1-sol` 子 Agent 在独立 worktree 修改 `sum.mjs`，实际 `node --test sum.test.mjs` 通过。
 - 真实主控执行 Run `552b359a-f226-4f3f-8a00-6d154fa0a658` 的代码差异与测试已回写；Chromium 点击验收后，Ticket 完成并升到 v2，页面错误为零。
