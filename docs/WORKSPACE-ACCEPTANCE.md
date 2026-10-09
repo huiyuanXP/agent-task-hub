@@ -13,10 +13,14 @@
 - 原有本地认证 API、只读 Ticket/Plan/Run MCP、规划修订/恢复/生命周期/浏览器、执行审批浏览器及两实例隔离 API/浏览器回归通过。
 - 登录浏览器测试修正响应释放夹具后通过，仍验证拒绝之前核实的旧 session 不能恢复私有状态，没有修改应用认证逻辑。
 
-## 当前预览中的实际记录
+## 本机 workspace 与保留记录
 
 - 点子工坊自身已安装并关联到项目“通用”，连接 `18a4de4d-4405-4ce8-adb2-54375d93f3fd`。
-- 独立验收 Git 项目已安装并关联到“工坊验收 Test”，连接 `81514e3d-54da-4571-abde-f0270a48adca`。
+- 主开发目录为 `/home/agent/projects/agent-task-hub`，使用 `main`；主连接配置与 MCP 运行文件位于 `.agent-task-hub/`。
+- 数据库 `.local/data.sqlite` 保留已有账户、40 条业务记录、2 个连接和执行历史；安装身份在 workspace 整理后保持一致。
+- “工坊验收 Test”连接 `81514e3d-54da-4571-abde-f0270a48adca` 的测试项目、三份未提交改动和验证资料保存在 `.local/evidence/workspace-materials-2026-10-09.tar.gz`，执行记录保留在数据库。
+- 主目录中的真实 STDIO MCP 读取到“通用”项目的 22 张 Ticket，其中 4 张完成，18 张进入后续处理范围。
+- 任务开始提交作为固定交付基准；客户端 13 项行为测试通过，覆盖模型自行提交修改与保留未跟踪文件的交付场景。
 - 用户两个点子通过工坊自身已安装的项目 MCP，由当前真实主控 Agent 领取并回写，各生成一个 Plan 和三个 Tickets。
 - 当前主控会话通过测试项目客户端领取一条已批准的 sum 修复 Ticket，委派真实 `gpt-6.1-sol` 子 Agent 在独立 worktree 修改 `sum.mjs`，实际 `node --test sum.test.mjs` 通过。
 - 真实主控执行 Run `552b359a-f226-4f3f-8a00-6d154fa0a658` 的代码差异与测试已回写；Chromium 点击验收后，Ticket 完成并升到 v2，页面错误为零。
