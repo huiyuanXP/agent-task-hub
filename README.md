@@ -25,6 +25,7 @@ npm start
 - [账户、客户端授权与撤销](docs/AUTHENTICATION.md)
 - [客户端安装与 workspace](docs/CONNECTORS.md)
 - [规划与修订](docs/PLANNING.md)
+- [详情页字段映射与页面结构](docs/DETAIL-PAGES.md)
 - [执行和验收](docs/EXECUTION.md)
 - [固定 Docker Runner](docs/RUNNER.md)
 - [实际功能清单](docs/FEATURES.md)
