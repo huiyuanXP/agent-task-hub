@@ -131,15 +131,18 @@ function principal(input:ConnectorPrincipal) {
 }
 async function dependencies(db:LocalDatabase,run:RunRow):Promise<string[]|null> {
  const body=JSON.parse(run.ticket_body) as Record<string,unknown>,raw=body.dependencies;
- if(raw===undefined || raw===null || raw==='' || (typeof raw==='string' && /^(none|无|无依赖|无依赖项|n\/a|-)\.?$/i.test(raw.trim())))return [];
+ if(raw===undefined || raw===null || raw==='' || (typeof raw==='string' && /^(none|无|无依赖|无依赖项|n\/a|-)[.。]?$/i.test(raw.trim())))return [];
  if(typeof raw!=='string')return null;
- const keys=[...new Set(raw.split(/[,，;；\s]+/).filter(Boolean))];if(keys.length>100)return null;
+ const keys=[...new Set(raw.split(/[,，、;；\s]+/).filter(Boolean))];if(keys.length>100)return null;
  const ids:string[]=[];
  for(const key of keys){
-  const candidates=await db.prepare(`SELECT id FROM records WHERE owner=? AND kind='ticket' AND id<>? AND COALESCE(NULLIF(json_extract(body,'$.project'),''),'通用')=?
-   AND (id=? OR (json_extract(body,'$.logicalKey')=? AND json_extract(body,'$.planId')=?)) AND json_extract(body,'$.status')='done' LIMIT 2`)
-   .bind(run.owner,run.ticket_id,run.project,key,key,typeof body.planId==='string'?body.planId:null).all<{id:string}>();
-  if(candidates.results.length!==1)return null;ids.push(candidates.results[0].id);
+  const lookup=(value:string)=>db.prepare(`SELECT id,json_extract(body,'$.status') AS status FROM records WHERE owner=? AND kind='ticket' AND id<>? AND COALESCE(NULLIF(json_extract(body,'$.project'),''),'通用')=?
+   AND (id=? OR (json_extract(body,'$.logicalKey')=? AND json_extract(body,'$.planId')=?)) LIMIT 2`)
+   .bind(run.owner,run.ticket_id,run.project,value,value,typeof body.planId==='string'?body.planId:null).all<{id:string;status:string}>();
+  let candidates=await lookup(key);
+  // Sentence punctuation is optional, but an exact Ticket ID or logical key takes precedence.
+  if(candidates.results.length===0 && /[.。]$/.test(key))candidates=await lookup(key.slice(0,-1));
+  if(candidates.results.length!==1 || candidates.results[0].status!=='done')return null;ids.push(candidates.results[0].id);
  }
  return ids;
 }

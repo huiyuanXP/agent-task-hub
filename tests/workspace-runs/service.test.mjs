@@ -153,11 +153,42 @@ test('revocation and changed Ticket revision fence all consequential worker writ
 });
 
 test('dependent development waits until same-project Plan logical dependency is done',async t=>{
- const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies','dependency-key','$.planId','plan') WHERE id='ticket'").run();
- await f.ticket('dependency',{logicalKey:'dependency-key',planId:'plan'});
+ const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies','T1。','$.planId','plan') WHERE id='ticket'").run();
+ await f.ticket('dependency',{logicalKey:'T1',planId:'plan'});
  const run=await f.prepare();await decideWorkspaceRun(f.db,'alice',run.id,'approve');assert.equal((await claimWorkspaceRun(f.db,f.principal)).job,null);
  const waiting=await getWorkspaceRun(f.db,'alice',run.id);assert.equal(waiting.events.at(-1).stage,'waiting');
  await f.db.prepare("UPDATE records SET body=json_set(body,'$.status','done') WHERE id='dependency'").run();assert.equal((await claimWorkspaceRun(f.db,f.principal)).job.id,run.id);
+});
+
+test('planner prerequisite sentences allow Chinese none phrases and fulfilled logical key lists',async t=>{
+ for(const dependencies of ['无。','无依赖。','none.','T1。','T1、T2。','T3、T4、T5。','T1、T2.'])await t.test(dependencies,async t=>{
+  const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies',?,'$.planId','plan') WHERE id='ticket'").bind(dependencies).run();
+  for(const key of ['T1','T2','T3','T4','T5'])await f.ticket(`dependency-${key}`,{logicalKey:key,planId:'plan',status:'done'});
+  const {run,job}=await f.running();assert.equal(job.id,run.id);assert.equal((await getWorkspaceRun(f.db,'alice',run.id)).state,'running');
+ });
+});
+
+test('unknown prerequisite prose and logical keys outside the owner, project or Plan remain blocked',async t=>{
+ for(const [name,dependencies,body,owner] of [
+  ['unknown prose','等待 T1 完成。',{},'alice'],
+  ['other Plan','T1。',{planId:'other-plan'},'alice'],
+  ['other project','T1。',{project:'other'},'alice'],
+  ['other owner','T1。',{},'bob'],
+ ])await t.test(name,async t=>{
+  const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies',?,'$.planId','plan') WHERE id='ticket'").bind(dependencies).run();
+  await f.ticket('dependency',{logicalKey:'T1',planId:'plan',status:'done',...body});
+  await f.db.prepare("UPDATE records SET owner=? WHERE id='dependency'").bind(owner).run();
+  const run=await f.prepare();await decideWorkspaceRun(f.db,'alice',run.id,'approve');assert.equal((await claimWorkspaceRun(f.db,f.principal)).job,null);
+  const waiting=await getWorkspaceRun(f.db,'alice',run.id);assert.equal(waiting.state,'approved');assert.equal(waiting.events.at(-1).stage,'waiting');
+ });
+});
+
+test('dependency IDs retain internal periods and exact terminal-period IDs take precedence',async t=>{
+ const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies','dependency.v1., dependency.v2.') WHERE id='ticket'").run();
+ await f.ticket('dependency.v1',{status:'done'});await f.ticket('dependency.v1.');await f.ticket('dependency.v2',{status:'done'});
+ const run=await f.prepare();await decideWorkspaceRun(f.db,'alice',run.id,'approve');assert.equal((await claimWorkspaceRun(f.db,f.principal)).job,null);
+ await f.db.prepare("UPDATE records SET body=json_set(body,'$.status','done') WHERE id='dependency.v1.'").run();
+ assert.equal((await claimWorkspaceRun(f.db,f.principal)).job.id,run.id);
 });
 
 test('list pagination is bounded and context-bound; HTTP validates body, origin, schema and ownership',async t=>{
