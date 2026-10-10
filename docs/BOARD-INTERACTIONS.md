@@ -1,40 +1,19 @@
 # Ticket 看板交互设计
 
-来源核对日期：2026-10-09。本文是源码支持的评估与设计合同，供后续功能 Tickets 实施；现役执行流程见 [EXECUTION.md](EXECUTION.md)，已交付能力见 [FEATURES.md](FEATURES.md)。本文分别记录当前应用事实、参考源码行为和拟采用的衔接条件。
+来源核对日期：2026-10-09；实施核对日期：2026-10-10。此安全分支实现已通过隔离 Chromium 的鼠标、键盘和可信触屏验证；原始参考设计与来源保留在后文。执行流程见 [EXECUTION.md](EXECUTION.md)，功能见 [FEATURES.md](FEATURES.md)。
 
-## 结论与适配范围
+## 当前实现与参考设计的适配
 
-采用 `@dnd-kit/core` 的 `DndContext`、`useDraggable`、`useDroppable`、鼠标/触屏/键盘传感器，在五个固定业务状态列上做拖放意图；通过一个业务动作解析函数将拖放、Ticket 详情按钮和键盘可见动作菜单连接到现有开发/授权/验收流程。显示顺序由优先级或时间比较器决定；同列释放结束交互，手工位置字段和 Sortable 重排属于范围外。
+最终使用原生 PointerEvent、window 事件、专用可聚焦拖动手柄、键盘列选择及可见等价菜单，没有新增 dnd-kit 依赖，也没有复制其示例源码。dnd-kit 是来源评估与交互设计参考；后文传感器配置描述属于参考方案。
 
-拖到进行中打开开发申请流程；申请、批准、领取和真实子进程启动分别展示。拖到完成打开与当前修订绑定的待验收 workspace Run；owner 确认验收后由既有 API/数据库触发器更新 Ticket。待开始、等待、异常的手工状态保存复用 Ticket 修订 CAS 与历史。活动 Run 优先使用 Run 操作，冻结 Ticket 内容保持稳定。
+- `components/board/ticket-board.tsx` 处理五个固定列上的临时意图、高亮和播报；同列、列外、Escape 和 touchCancel 均不写业务数据。鼠标及触屏手柄支持滚屏到空列；键盘 Space/Enter、方向键和取消可达相同操作。
+- `lib/tickets/selectors.mts` 的过滤与稳定比较器同时用于列表及看板；默认 created 降序，优先级等值按 created 降序再 id 升序，时间等值按 id 升序；缺失值放末尾。偏好限当前账户页面会话，不改变执行调度。
+- `components/board/ticket-action-dialog.tsx` 根据精确 Ticket id/revision 和全部相关 workspace 分页、Docker 活动记录解析动作。进行中只打开申请，完成只打开当前 review 验收；完成来源不重开，有活动记录先打开其运行流程。
+- `components/ticket-execution/ticket-execution-panel.tsx` 与共享 hook 在详情、看板及独立面板复用；详情默认只有明确“执行此任务”入口，阅读不产生执行输入。申请、批准、领取、验收保持各自独立步骤，历史修订不提供批准、启动或验收按钮。
+- `app/api/records/route.ts` 的手工状态 CAS 与 history 在同一事务内检查 workspace/Docker 逻辑活动和物理占用；409 不产生 history。前端保留原因和输入，重新读取后由用户确认；401/403 清理私有执行状态。
+- `lib/projects/catalog.mts` 为当前账户汇总业务记录和已登记项目，`GET /api/records` 返回 `{records,projects}`；历史和手工执行快照不新建项目选项。
 
-DSH 的准确仓库、插件及版本仍为待提供项。本次外部来源采用 Ticket 允许的 dnd-kit 官方多容器看板式示例，来源名称始终记为 dnd-kit MultipleContainers。
-
-## 当前应用事实与源码位置
-
-以下行为已按当前隔离 worktree 的源码核对；设计建议在后文单独列出。
-
-| 事实 | 精确位置 | 对设计的含义 |
-| --- | --- | --- |
-| 五列为 todo/running/waiting/done/error；等待原因为 clarification/approval/review/external/recovery | `app/page.tsx:48`、`:55` | 列 ID 和业务状态统一，展示中文标签 |
-| 看板按 records 读取顺序逐列展示；列表与看板复用相同渲染；详情状态可手工保存 | `app/page.tsx:921`、`:1187`；`app/api/records/route.ts:15` | 目前排序来源是 `created DESC`；排序和拖动是设计交付 |
-| 详情保存使用完整 draft；保存成功 reload records，失败保留输入 | `app/page.tsx:256` | 状态写入应复用保存逻辑，保留业务 body，避免把展示 DTO 字段写回 |
-| 修改 records 要求当前 `revision`；事务插入 history 并 revision+1；冲突返回 409 | `app/api/records/route.ts:93`、`:118` 的 POST 更新分支 | 手工状态确认同样绑定冻结修订；409 后刷新并由用户重新确认目标动作 |
-| waiting 要求合法等待原因；手工 done 要求 evidence | `app/api/records/route.ts:78`、`:86` | 拖到等待需选择原因；完成拖动走 Run 验收，其证据来自 Run 交付 |
-| 开发面板选择同项目、未撤销、带 execute capability 的连接，申请绑定 Ticket 修订和期限 | `components/workspace-runs/development-panel.tsx:45`、`:60` | 详情和拖动应传入确定的 Ticket ID/修订，复用同一个选择与申请 UI |
-| 开发 Run 为 pending/approved/running/review/succeeded/failed/cancelled | `lib/workspace-runs/types.mts:3` | 与 Ticket status 使用两个独立命名空间 |
-| prepare 冻结完整 Ticket body、revision、project、connection、workspace、timeout；prepare 校验 Ticket status，done 申请返回 scope conflict | `lib/workspace-runs/service.mts:65` 的 prepare、`:14` 的 ticketScope | 申请后的状态变化应来自展示投影；手工改 body/revision 会影响后续批准/领取/续租/回报/验收 |
-| pending/approved/running/review 在 workspace 领域占用同 Ticket；物理 Ticket 和连接占用由 generation、physical_closed_at 控制 | `migrations/005_workspace_runs.sql:32` | 逻辑取消与可再次启动分别处理；活动记录优先复用 |
-| approved 领取检查依赖全部 done、租约、同连接物理占用，领取后标 running | `lib/workspace-runs/service.mts:149` | 排序只影响用户查看；Agent 领取现为 `created_at,id`，依赖等待由事件说明 |
-| Agent 领取后创建 worktree、调用模型进程，续租取消时中止受管进程 | `connector/agent.mjs:81`、`:111`、`:115` | `running` 表示已领取，事件可进一步显示 preparing/agent；真实启动证据来自 agent 阶段与受管进程 |
-| complete 报告实际 diff/tests/result 并进入 review、确认物理结束；accept 检查固定 body/修订和连接 | `lib/workspace-runs/service.mts:219`、`:93` | 拖动完成先读交付、再确认 accept |
-| accept 的数据库触发器原子写 history、Ticket status=done、revision+1 | `migrations/005_workspace_runs.sql:87` | 验收直接调用 accept，records reload 得到完成状态；状态写入由 accept 触发器承担 |
-| workspace cancel 支持 pending/approved/running/review；rework 支持 review/failed/cancelled，并创建稳定 successor | `lib/workspace-runs/service.mts:93` | 取消和返工复用业务 API；历史结果持续保留 |
-| Docker Run 为 queued/running/waiting/succeeded/failed/cancelled，授权有 pending/approved/rejected/revoked/expired/stale_revision/stale_definition | `lib/execution/types.mts:14`；`lib/execution/authorization-types.mts:20`、`:21` | Docker 授权与开发审批保留各自输入、状态和证据 |
-| Docker 申请与批准独立于 dispatch start；真实结果来自后端签名收据 | `components/execution/authorization-panel.tsx:107`、`:125`、`:149`；`lib/execution/dispatch.mts`；`docs/EXECUTION.md` | 拖放只选择/打开流程，启动按钮承担明确 owner 操作 |
-| 手工 records kind=run 是追加不可改快照，source=manual | `app/api/records/route.ts:107`、`:196`；`app/page.tsx:950` | 手工快照、Docker succeeded 和 workspace review 分别保留含义 |
-
-代码事实：现有 UI 展示独立面板，Ticket 卡片详情的保存和手工快照与真实执行分开。设计状态：本文的拖动、显式排序、详情预选入口和 Run 状态投影由后续功能 Tickets 实施并验证。
+本轮浏览器实际覆盖13项看板交互（含触屏可信事件、409、取消零写、排序与同任务绑定）。真实 Docker daemon 执行与真实模型生成是另行验收项，不能由 fixture 或 build 推定。
 
 ## 可复核外部来源
 
@@ -77,7 +56,7 @@ DSH 的准确仓库、插件及版本仍为待提供项。本次外部来源采�
 
 ## 动作矩阵
 
-以下为后续实现设计。判定顺序：身份/当前修订与项目有效 → 同列/列外结束 → 已完成来源规则 → 活动 Run 规则 → 目标列规则。来源为 `done` 的 Ticket 拖动到任意其他列时统一返回 `completed-info`，保持持久 `status=done`，只说明完成记录与既有返工入口。`completed-info` 是信息动作，业务写入仍由明确的既有操作承担。跨项目、改变项目、排序策略、审批与操作类型均通过其独立入口。
+以下动作合同由当前 selector 与对话框落实。判定顺序：身份/当前修订与项目有效 → 同列/列外结束 → 已完成来源规则 → 活动 Run 规则 → 目标列规则。来源为 `done` 的 Ticket 拖动到任意其他列时统一返回 `completed-info`，保持持久 `status=done`，只说明完成记录与既有返工入口。`completed-info` 是信息动作，业务写入仍由明确的既有操作承担。跨项目、改变项目、排序策略、审批与操作类型均通过其独立入口。
 
 ### 各来源列到各目标列（有效 Ticket，done 来源先返回信息动作，其余来源优先处理活动 Run）
 
@@ -119,7 +98,7 @@ DSH 的准确仓库、插件及版本仍为待提供项。本次外部来源采�
 
 | 业务步骤 | 现役接口与 payload | 返回/约束 |
 | --- | --- | --- |
-| 当前 Ticket 列表/修订 | `GET /api/records` | `{records}`，owner 隔离；Row 包括 id/kind/revision/created/updated 与 body |
+| 当前 Ticket 列表/修订 | `GET /api/records` | `{records,projects}`，owner 隔离；Row 包括 id/kind/revision/created/updated 与 body |
 | 手工状态保存 | `POST /api/records {id,kind:"ticket",revision,title,...业务body,status,waitingReason?,notes?}` | `{id,revision}`；修订 CAS、history；409 提醒刷新 |
 | 连接选择 | `GET /api/connectors` | `connections` 按 Ticket project、!revokedAt、capabilities execute 筛选；agentReady 作为显示状态 |
 | workspace 相关 Runs | `GET /api/workspace-runs?ticketId=<id>&limit=100`，续读 nextCursor | `{runs,nextCursor}`；Run 含 ticketId/revision/connectionId/project/workspace/operation/state/result/events |
@@ -135,16 +114,16 @@ DSH 的准确仓库、插件及版本仍为待提供项。本次外部来源采�
 | Docker 实际启动 | `POST /api/execution/dispatch {action:"start",runId}` | 有效批准、冻结操作、预算和签名后端检查后 dispatch |
 | Docker 取消意图/停止 | `POST /api/execution {action:"cancel",id,expectedVersion}`；随后 `POST /api/execution/dispatch {action:"cancel",runId}` | 领域 Run cancelled 与后端停止收据分别记录；API id 与 workspace runId 字段区分 |
 
-三个后续实现边界必须保留：
+以下读取与执行边界必须保留：
 
-- workspace 列表默认只返回最新 20 项，现役面板按全局 GET 加前端筛选。卡片动作应按 ticketId 读取并处理 nextCursor，避免将分页之外的活动 Run 当作可新申请。
+- workspace 列表默认只返回最新20项；共享读取函数按 ticketId 与 nextCursor 读完全部分页。已通过102条记录、活动 pending 位于第二页的浏览器验证。
 - WorkspaceRun DTO 当前包含 state/result/events，物理关闭字段在 RunRow 中；UI 精确展示“可重新启动”若需读取物理占用，应通过后续明确 DTO 设计实现。后端唯一索引与 claim 检查持续承担判定，失败后返回真实占用提示。
 - workspace 与 Docker 的活动唯一索引分别存在于各自表；跨两种后端的统一活动占用属于后续服务合同。前端动作解析同时识别两类占用；若要全站强制跨后端互斥，需要后续单独的服务合同，而本文文档交付保留现役边界。
 
-## 排序边界与后续行为验证
+## 排序边界与行为验证
 
 支持优先级 P0→P1→P2→P3（紧急优先）或反向、created/updated 时间的新到旧或旧到新；优先级相同用 `created` 降序再 `id` 升序确保稳定；按 `created` 或 `updated` 排序时，相同时间只用 `id` 升序作为次级键。缺失/未知 priority 放末尾；无效时间放末尾，与方向独立，避免 NaN 比较器。排序函数以复制的数组返回结果，同一比较器用于看板每列和列表；项目/关键词/状态过滤先确定可见集合，固定列顺序保持 todo/running/waiting/done/error。
 
 排序偏好只保留当前登录页面会话；刷新持久化、列内手工重排、跨项目移动与执行调度优先级属于范围外。created 保留创建时间，updated 随真实状态/CAS 保存变化；打开申请或取消弹层属于 UI 状态。
 
-后续功能 Tickets 验证有业务价值的行为：鼠标/触屏/键盘到达空列；Space/Enter/Escape 与焦点返回；同列和取消时业务记录数保持；详情与拖动预选相同 id/revision；prepare/approve/claim/agent 事件分层；活动 Run 与 review 修订保持稳定；accept 原子产生一个 history 与 revision+1；状态 POST 409 保留用户意图且 refresh；跨分页活动 Run；Docker 503 取消显示物理停止状态；P0/时间等值和缺失值排序稳定。依赖及 React 19 兼容由真正实施与必要构建、类型、lint、API/浏览器验证给出证据。
+本轮已验证鼠标/触屏/键盘、取消零写、CAS/409、分页与稳定排序；真实后端与模型验证仍须独立证据。原验收合同要求：鼠标/触屏/键盘到达空列；Space/Enter/Escape 与焦点返回；同列和取消时业务记录数保持；详情与拖动预选相同 id/revision；prepare/approve/claim/agent 事件分层；活动 Run 与 review 修订保持稳定；accept 原子产生一个 history 与 revision+1；状态 POST 409 保留用户意图且 refresh；跨分页活动 Run；Docker 503 取消显示物理停止状态；P0/时间等值和缺失值排序稳定。依赖及 React 19 兼容由真正实施与必要构建、类型、lint、API/浏览器验证给出证据。

@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { LocalDatabase } from '../database.mts';
 import { AuthError, checkRequestOrigin, configuredOrigin } from '../local-auth.mts';
+import { ensureProject, listProjects } from '../projects/catalog.mts';
+export { ensureProject } from '../projects/catalog.mts';
 
 export interface ConnectorPrincipal { id:string; owner:string; projectId:string; project:string; capabilities:string[] }
 interface ConnectionRow {
@@ -30,20 +32,12 @@ export function connectionDTO(row:ConnectionRow, now=Date.now()) {
  return {id:row.id,name:row.name,workspace:row.workspace,projectId:row.project_id,project:row.project,version:row.version,status,lastSeen:row.last_seen,mcpLastSeen:row.mcp_last_seen,agentLastSeen:row.agent_last_seen,createdAt:row.created_at,expiresAt:row.token_expires_at,
   agentReady:row.agent_ready===1,agentError:row.agent_error,runtime:row.runtime_json?JSON.parse(row.runtime_json):null,capabilities:JSON.parse(row.capabilities) as string[],revokedAt:row.revoked_at};
 }
-export async function ensureProject(db:LocalDatabase, owner:string, name:string) {
- await db.prepare('INSERT OR IGNORE INTO workspace_projects(id,owner,name,created_at) VALUES(?,?,?,?)').bind(randomUUID(),owner,name,Date.now()).run();
- const row=await db.prepare('SELECT id,name FROM workspace_projects WHERE owner=? AND name=?').bind(owner,name).first<{id:string;name:string}>();
- if(!row)throw Error('Project unavailable');return row;
-}
 export async function listConnections(db:LocalDatabase,owner:string) {
- // Existing text projects become stable identities without rewriting original records.
- const names=await db.prepare("SELECT DISTINCT COALESCE(NULLIF(json_extract(body,'$.project'),''),'通用') AS name FROM records WHERE owner=? AND kind IN ('idea','plan','ticket') AND json_valid(body)").bind(owner).all<{name:unknown}>();
- for(const {name} of names.results)if(typeof name==='string' && name.length<=120)await ensureProject(db,owner,name);
  const [projects,connections]=await Promise.all([
-  db.prepare('SELECT id,name FROM workspace_projects WHERE owner=? ORDER BY name,id').bind(owner).all<{id:string;name:string}>(),
+  listProjects(db,owner),
   db.prepare('SELECT c.*,p.name AS project FROM workspace_connections c JOIN workspace_projects p ON p.id=c.project_id AND p.owner=c.owner WHERE c.owner=? ORDER BY c.created_at DESC,c.id').bind(owner).all<ConnectionRow>(),
  ]);
- return {projects:projects.results,connections:await Promise.all(connections.results.map(async row=>{
+ return {projects,connections:await Promise.all(connections.results.map(async row=>{
   const events=await db.prepare('SELECT id,mode,message,created_at FROM workspace_connection_events WHERE connection_id=? AND owner=? ORDER BY created_at DESC,id DESC LIMIT 100').bind(row.id,owner).all<{id:string;mode:string;message:string|null;created_at:number}>();
   return {...connectionDTO(row),events:events.results.map(event=>({id:event.id,mode:event.mode,message:event.message,createdAt:event.created_at}))};
  }))};

@@ -42,7 +42,7 @@ try {
   const failures=[];
   const check=async(name,fn)=>{try{await fn(); console.log('PASS: '+name);}catch(e){failures.push({name,error:String(e)}); console.error('FAIL: '+name+' '+String(e));}};
   await check('active lease displays deadline and countdown then expires with usable retry',async()=>{
-    const c=card(active.idea.title); await c.getByText(/租约到期/).waitFor();
+    const c=card(active.idea.title); await c.getByText('规划详情',{exact:true}).click(); await c.getByText(/租约到期/).waitFor();
     assert.equal(await c.getByRole('button',{name:'Agent 正在处理'}).isDisabled(),true);
     await f.db.prepare('UPDATE jobs SET lease=? WHERE id=?').bind(Date.now()+10000,active.id).run();
     const refreshed=page.waitForResponse(r=>r.url()===base+'/api/planning'&&r.request().method()==='GET');
@@ -62,11 +62,11 @@ try {
     const row=await f.db.prepare('SELECT generation,retry_after FROM jobs WHERE id=?').bind(expired.id).first(); assert.equal(row.generation,1); assert.ok(row.retry_after>Date.now());
   });
   await check('permanent reason and exhausted recovery visible with eligible action',async()=>{
-    const c=card(permanent.idea.title); await c.getByText(/recovery_exhausted/).waitFor(); await c.getByText(/permanent_http/).waitFor();
+    const c=card(permanent.idea.title); await c.getByText(/recovery_exhausted/).waitFor(); await c.getByText(/^原因：.*permanent_http/).waitFor();
     assert.equal(await c.getByRole('button',{name:'重试规划'}).isEnabled(),true);
   });
   await check('backoff displays authoritative next retry and sanitized target reason',async()=>{
-    const c=card(backoff.idea.title); await c.getByText(/下次投递/).waitFor(); await c.getByText(/temporary_http/).waitFor();
+    const c=card(backoff.idea.title); await c.getByText('规划详情',{exact:true}).click(); await c.getByText(/下次投递/).waitFor(); await c.getByText(/^原因：.*temporary_http/).waitFor();
     assert.equal(await c.getByRole('button',{name:'等待自动重试'}).isDisabled(),true);
   });
   await check('missing metadata preserves manual recovery action',async()=>{

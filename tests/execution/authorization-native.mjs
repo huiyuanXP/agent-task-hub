@@ -72,10 +72,15 @@ try {
   const page = await restricted.context.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(base); await page.getByRole('button', { name: /Ticket 看板/ }).click();
+  const openAuthorization = async () => {
+    const summary = page.getByText('固定 Docker 操作与独立执行授权', { exact: true });
+    if (!(await summary.evaluate(element => element.parentElement.open))) await summary.click();
+  };
+  await openAuthorization();
   const panel = page.getByRole('region', { name: '执行授权' }); await panel.waitFor();
   await panel.getByRole('button', { name: '请求执行授权' }).click();
   await panel.getByText('pending', { exact: true }).waitFor();
-  await page.reload(); await page.getByRole('button', { name: /Ticket 看板/ }).click();
+  await page.reload(); await page.getByRole('button', { name: /Ticket 看板/ }).click(); await openAuthorization();
   await panel.getByText('pending', { exact: true }).waitFor();
   await panel.getByRole('button', { name: '批准授权' }).click(); await panel.getByText('approved', { exact: true }).waitFor();
   await panel.getByRole('button', { name: '撤销授权' }).click(); await panel.getByText('revoked', { exact: true }).waitFor();

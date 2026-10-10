@@ -57,6 +57,7 @@ try {
   await page.getByRole('button', { name: '点子收件箱', exact: false }).click();
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).click();
   const ideaDialog = page.getByRole('dialog');
+  await ideaDialog.getByRole('button', { name: '编辑', exact: true }).click();
   await ideaDialog.getByRole('textbox', { name: '标题', exact: true }).fill(fixture.ideaTitle + ' revised');
   const revisionSaved = page.waitForResponse(response => response.url() === dev + '/api/records' && response.request().method() === 'POST' && response.status() === 200);
   await ideaDialog.getByRole('button', { name: '保存到本地', exact: true }).click();
@@ -70,7 +71,7 @@ try {
   await page.getByRole('button', { name: '执行记录', exact: false }).click();
   await page.getByRole('heading', { name: fixture.runTitle, exact: true }).waitFor();
   await page.getByText('查看冻结的任务约定', { exact: true }).click();
-  const frozen = page.locator('details[open]');
+  const frozen = page.locator('details[open]').filter({ has: page.getByText('查看冻结的任务约定', { exact: true }) });
   assert.match(await frozen.innerText(), /Validate snapshot/);
   assert.match(await frozen.innerText(), /Loopback only/);
   assert.match(await frozen.innerText(), /Snapshot is immutable/);

@@ -11,9 +11,10 @@ const states: Record<string, string> = {
 const capabilityNames: Record<string, string> = { read: "读取项目", submit: "报点子 / Ticket", plan: "规划", execute: "开发执行" };
 const shell = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 
-export function ConnectionPanel({ projects, initialProject = "通用", onAuthenticationDenied }: {
+export function ConnectionPanel({ projects, initialProject = "通用", onProjectsChanged, onAuthenticationDenied }: {
   projects: string[];
   initialProject?: string;
+  onProjectsChanged: (projects: ConnectionList["projects"]) => void;
   onAuthenticationDenied: () => void;
 }) {
   const [data, setData] = useState<ConnectionList>({ connections: [], projects: [] });
@@ -38,11 +39,11 @@ export function ConnectionPanel({ projects, initialProject = "通用", onAuthent
     const current = ++sequence.current;
     try {
       const value = await request();
-      if (current === sequence.current) { setData(value); setError(""); }
+      if (current === sequence.current) { setData(value); onProjectsChanged(value.projects); setError(""); }
     } catch (failure) {
       if (current === sequence.current) setError(failure instanceof Error ? failure.message : "无法读取连接");
     }
-  }, [request]);
+  }, [request, onProjectsChanged]);
   useEffect(() => {
     const pending = sequence;
     const startup = setTimeout(() => void refresh(), 0);
@@ -70,7 +71,7 @@ export function ConnectionPanel({ projects, initialProject = "通用", onAuthent
       <div className="card-actions"><Link className="secondary" href="/install" target="_blank">安装指南</Link><a className="primary" href="/api/connectors/download" download>下载 MCP / CLI 包</a></div>
     </div>
     <form className="workspace-form" onSubmit={createInvite}>
-      <label>关联项目<input value={project} onChange={e => setProject(e.target.value)} list="connector-projects" required maxLength={120} /><datalist id="connector-projects">{Array.from(new Set([...projects, ...data.projects.map(p => p.name), "通用"])).map(p => <option key={p} value={p} />)}</datalist></label>
+      <label>关联项目<input value={project} onChange={e => setProject(e.target.value)} list="connector-projects" required maxLength={120} /><datalist id="connector-projects">{projects.map(p => <option key={p} value={p} />)}</datalist></label>
       <label>连接名称<input value={name} onChange={e => setName(e.target.value)} required maxLength={120} /></label>
       <fieldset><legend>客户端能力</legend>{Object.entries(capabilityNames).map(([key, label]) => <label className="capability" key={key}><input type="checkbox" checked={capabilities.includes(key)} onChange={e => setCapabilities(e.target.checked ? [...capabilities, key] : capabilities.filter(c => c !== key))} />{label}</label>)}</fieldset>
       <button className="primary" type="submit" disabled={busy || !capabilities.length}>生成安装授权码</button>

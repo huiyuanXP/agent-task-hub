@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 export const VERSION = '1.0.0';
+export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'README.md'];
 export function checkNode() {
   const [major, minor, patch] = process.versions.node.split('.').map(Number);
@@ -51,8 +52,25 @@ export async function request(config, path, body, { signal, timeoutMs = 10000 } 
     headers: { 'content-type': 'application/json', ...(config.token ? { authorization: `Bearer ${config.token}` } : {}) },
     body: JSON.stringify(body),
   });
-  const raw = await response.text();
-  if (raw.length > 2 * 1024 * 1024) throw Error('Service response exceeds the limit');
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let raw = '', bytes = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_RESPONSE_BYTES) throw Error('Service response exceeds the limit');
+        raw += decoder.decode(value, { stream: true });
+      }
+      raw += decoder.decode();
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      if (error instanceof TypeError && error.code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw Error('Service returned invalid UTF-8');
+      throw error;
+    } finally { reader.releaseLock(); }
+  }
   let value;
   try { value = JSON.parse(raw); } catch { throw Error(`Service returned invalid JSON (${response.status})`); }
   if (!response.ok) {

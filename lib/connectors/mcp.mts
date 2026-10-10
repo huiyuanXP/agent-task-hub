@@ -4,7 +4,8 @@ import { ExecutionError } from '../execution/errors.mts';
 import { taskReadTools, dispatchTaskReadTool } from '../task-reads/mcp.mts';
 import type { TrustedRegistry } from '../task-reads/runs.mts';
 import { authenticateConnector, connectorInput, recordConnectorUse, type ConnectorPrincipal } from './service.mts';
-import { connectorJSON, connectorResponse } from './http.mts';
+import { boundedMCPResponse as connectorResponse } from '../task-reads/bounds.mts';
+import { connectorJSON } from './http.mts';
 import { planningTools, connectorWriteTools, dispatchPlanningTool } from './planning.mts';
 
 function permitted(principal:ConnectorPrincipal,name:string) {
@@ -34,7 +35,7 @@ export async function handleConnectorMCP(db:LocalDatabase,req:Request,registry:T
   await recordConnectorUse(db,principal);
   try {
    let result=await dispatchPlanningTool(db,principal.owner,params.name,params.arguments,principal);
-   if(result===undefined)result=await dispatchTaskReadTool(db,principal.owner,params.name,params.arguments,registry,principal.project);
+   if(result===undefined)result=await dispatchTaskReadTool(db,principal.owner,params.name,params.arguments,registry,{project:principal.project});
    if(result===undefined)return rpcError(-32602,'Unknown tool');
    return respond({content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result,isError:false});
   }catch(error){

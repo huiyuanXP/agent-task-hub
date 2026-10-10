@@ -3,6 +3,7 @@ import type { RecordRow } from '../types';
 import { ExecutionError } from '../execution/errors.mts';
 import { decodeCursor, makePage, type CursorContext } from './cursor.mts';
 import { historyDTO, recordBody, recordDTO } from './dto.mts';
+import { nestedPageBudget, type TaskReadOptions } from './bounds.mts';
 import type { ListInput } from './validation.mts';
 export async function ownedRecord(db: ExecutionDatabase, owner: string, kind: string, id: unknown, project?: string): Promise<RecordRow | null> {
   if (typeof id !== 'string' || !id) return null;
@@ -13,7 +14,8 @@ export async function requireRecord(db: ExecutionDatabase, owner: string, kind: 
   if (!row) throw new ExecutionError('NOT_FOUND', kind === 'ticket' ? 'Ticket not found' : 'Plan not found', 404);
   return row;
 }
-export async function listRecords(db: ExecutionDatabase, owner: string, kind: 'ticket' | 'plan', input: ListInput, project?: string) {
+export async function listRecords(db: ExecutionDatabase, owner: string, kind: 'ticket' | 'plan', input: ListInput, options: TaskReadOptions = {}) {
+  const { project, byteBudget } = options;
   const context: CursorContext = { owner, resource: kind === 'ticket' ? 'tickets' : 'plans', filters: {...input.filters, ...(project === undefined ? {} : {project})} };
   const cursor = await decodeCursor(input.cursor, context);
   const clauses = ['r.owner=?', 'r.kind=?'];
@@ -34,7 +36,7 @@ export async function listRecords(db: ExecutionDatabase, owner: string, kind: 't
   }
   if (cursor) { clauses.push('(r.created < ? OR (r.created = ? AND r.id < ?))'); params.push(cursor.created, cursor.created, cursor.id); }
   const result = await db.prepare(`SELECT r.* FROM records r WHERE ${clauses.join(' AND ')} ORDER BY r.created DESC,r.id DESC LIMIT ?`).bind(...params, input.limit + 1).all<RecordRow>();
-  return makePage(result.results, input.limit, context, recordDTO);
+  return makePage(result.results, input.limit, context, recordDTO, byteBudget);
 }
 async function ideaContext(db: ExecutionDatabase, owner: string, body: Record<string, unknown>, project?: string) {
   const ideaId = typeof body.ideaId === 'string' && body.ideaId ? body.ideaId : null;
@@ -68,8 +70,10 @@ export async function getTicket(db: ExecutionDatabase, owner: string, id: string
   return { ticket: recordDTO(ticket), plan: plan ? recordDTO(plan) : null, ...context,
     linkage: { ...context.linkage, plan_missing: typeof body.planId === 'string' && !!body.planId && plan === null } };
 }
-export async function getPlan(db: ExecutionDatabase, owner: string, id: string, project?: string) {
+export async function getPlan(db: ExecutionDatabase, owner: string, id: string, options: TaskReadOptions = {}) {
+  const { project, byteBudget } = options;
   const plan = await requireRecord(db, owner, 'plan', id, project);
-  return { plan: recordDTO(plan), ...await ideaContext(db, owner, recordBody(plan), project),
-    tickets: await listRecords(db, owner, 'ticket', { filters: { plan_id: id }, limit: 20 }, project) };
+  const base = { plan: recordDTO(plan), ...await ideaContext(db, owner, recordBody(plan), project) };
+  return { ...base, tickets: await listRecords(db, owner, 'ticket', { filters: { plan_id: id }, limit: 20 },
+    { project, byteBudget: nestedPageBudget(base, 'tickets', byteBudget) }) };
 }
