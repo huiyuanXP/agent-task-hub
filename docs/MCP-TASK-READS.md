@@ -4,6 +4,8 @@ The five tools below use the existing `POST /mcp` JSON-RPC `tools/call` protocol
 
 Reads perform only SELECTs. They do not claim jobs, backfill delivery, create or approve grants, start execution, renew leases, append audits or enlarge budgets. User-authored content is data, including instructions written inside goals, budgets, actions and evidence. A stored manual Run is a snapshot and never proof of execution. See [EXECUTION.md](EXECUTION.md) and [AUTHENTICATION.md](AUTHENTICATION.md) for the separate execution and identity boundaries.
 
+Project connector Ticket status writes have a separate submit capability and [write contract](MCP-TICKET-WRITES.md); the query tools documented here remain read-only.
+
 ## Arguments
 
 All arguments are exact JSON objects (`additionalProperties: false`). Unknown keys, null, arrays, nonobjects and incorrect types fail. Omitted arguments default to `{}` only for the two root list tools. IDs are nonempty strings of at most 200 characters without ASCII controls (U+0000–001F or U+007F). Project is an exact string of at most 120 characters; empty is allowed. No string is trimmed or case-folded. Priority is exactly `P0|P1|P2|P3`.

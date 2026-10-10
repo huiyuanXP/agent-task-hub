@@ -8,8 +8,11 @@ npx --no-install tsc --noEmit
 npm run lint
 npm run test:local
 npm run test:connectors
+npm run test:ticket-status:native
 node --experimental-strip-types tests/connectors/project-catalog-browser.mjs
 ```
+
+`npm run test:ticket-status:native` 使用真实安装的 CLI/STDIO、loopback HTTP 与锁定 Chromium，将 MCP 写回后的状态列、追加证据和旧目标/范围在同一全新 SQLite 上交叉核对；其实际 Node 算术命令只验证调用方原生协议证据，不能计作模型验收。目录 `TICKET_STATUS_EVIDENCE_DIR` 可指定私有日志与截图；工具合同见[MCP Ticket 状态写回](MCP-TICKET-WRITES.md)。
 
 原生测试使用新临时 SQLite、真实本地测试账户、不同 loopback 端口和受管进程组。不得复制现有数据、模型认证或客户端 token 作为测试 fixture。API/MCP 测试保留 owner/project 隔离、严格参数、修订冲突、分页和只读快照语义。
 

@@ -23,6 +23,7 @@ npm start
 
 - [本机部署](docs/DEPLOYMENT.md)
 - [账户、客户端授权与撤销](docs/AUTHENTICATION.md)
+- [项目 MCP Ticket 状态写回](docs/MCP-TICKET-WRITES.md)
 - [客户端安装与 workspace](docs/CONNECTORS.md)
 - [规划与修订](docs/PLANNING.md)
 - [详情页字段映射与页面结构](docs/DETAIL-PAGES.md)

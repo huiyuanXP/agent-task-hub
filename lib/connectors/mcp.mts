@@ -7,13 +7,14 @@ import { authenticateConnector, connectorInput, recordConnectorUse, type Connect
 import { boundedMCPResponse as connectorResponse } from '../task-reads/bounds.mts';
 import { connectorJSON } from './http.mts';
 import { planningTools, connectorWriteTools, dispatchPlanningTool } from './planning.mts';
+import { ticketStatusTool, updateTicketStatus } from '../tickets/status-update.mts';
 
 function permitted(principal:ConnectorPrincipal,name:string) {
- const caps=name==='create_idea'||name==='create_ticket'?['submit']:name==='get_idea'||name==='list_planning_jobs'?['read','plan']:taskReadTools.some(t=>t.name===name)?['read']:['plan'];
+ const caps=name==='create_idea'||name==='create_ticket'||name==='update_ticket_status'?['submit']:name==='get_idea'||name==='list_planning_jobs'?['read','plan']:taskReadTools.some(t=>t.name===name)?['read']:['plan'];
  return caps.some(cap=>principal.capabilities.includes(cap));
 }
 export function scopedConnectorTools(principal:ConnectorPrincipal) {
- return [...planningTools,...connectorWriteTools,...taskReadTools].filter(tool=>permitted(principal,tool.name));
+ return [...planningTools,...connectorWriteTools,ticketStatusTool,...taskReadTools].filter(tool=>permitted(principal,tool.name));
 }
 export async function handleConnectorMCP(db:LocalDatabase,req:Request,registry:TrustedRegistry=()=>[]) {
  let id:string|number|null=null;
@@ -34,13 +35,14 @@ export async function handleConnectorMCP(db:LocalDatabase,req:Request,registry:T
   if(typeof params.name!=='string'||!scopedConnectorTools(principal).some(t=>t.name===params.name))return rpcError(-32602,'Tool unavailable for this connector');
   await recordConnectorUse(db,principal);
   try {
-   let result=await dispatchPlanningTool(db,principal.owner,params.name,params.arguments,principal);
+   let result=params.name==='update_ticket_status'?await updateTicketStatus(db,principal,params.arguments):await dispatchPlanningTool(db,principal.owner,params.name,params.arguments,principal);
    if(result===undefined)result=await dispatchTaskReadTool(db,principal.owner,params.name,params.arguments,registry,{project:principal.project});
    if(result===undefined)return rpcError(-32602,'Unknown tool');
    return respond({content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result,isError:false});
   }catch(error){
    if(error instanceof AuthError&&error.status===401)return rpcError(-32001,error.message,401);
    const message=error instanceof AuthError||error instanceof ExecutionError?error.message:'Connector tool unavailable';
+   if(params.name==='update_ticket_status')return respond({content:[{type:'text',text:message}],structuredContent:{error:{status:error instanceof AuthError?error.status:503,message}},isError:true});
    return respond({content:[{type:'text',text:message}],isError:true});
   }
  }catch(error){
