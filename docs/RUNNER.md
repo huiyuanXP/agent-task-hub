@@ -22,4 +22,12 @@ Runner journal 保存 permit、真实 deadline、操作和后端状态。重启�
 
 相关检查为 npm run test:execution:domain、npm run test:execution、npm run test:backend:integration。缺少真实 daemon 不应假装 Docker 检查通过；本机开发闭环检查不能替代固定容器隔离检查。
 
-Run 专属 Worker 身份链在本地源码提供发放、撤销、两个 Run 查询和六个租约动作；generation 与 action ledger 已实施，持久 consumer 尚待实施。后端接入采用原生签名协议；loopback peer 的签名证据与实际 Docker 验收分别记录，后者仍需上述 daemon 与镜像。原生账户/SQLite 接入和 permit 对账条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
+Run 专属 Worker 身份链在本地源码提供发放、撤销、两个 Run 查询和六个租约动作；generation 与 action ledger 已实施，持久 consumer 已在本地源码实现，使用私有 journal 与 kernel flock 保存请求前的 secret/ID；2 秒续租、单请求 2.5 秒上限、6 秒 generation 租约和最多 60 秒正常轮询分别生效。后端接入采用原生签名协议；loopback peer 的签名证据与实际 Docker 验收分别记录，后者仍需上述 daemon 与镜像。原生账户/SQLite 接入和 permit 对账条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
+
+## Run 专属 consumer CLI
+
+用本地 owner 已批准的 Run 与绝对私有状态目录调用 `npm run execution:consume -- bootstrap --endpoint <origin>/api/execution/worker-mcp --run-id <run-id> --state-dir <absolute-private-directory> --token-file <absolute-private-token-file>`。受保护 token 文件属于当前 uid、0600、单链接，包含 43 字符 API token 和可选换行；也可使用继承的 `--token-fd 3`。bootstrap 的 secret/ID 在请求前保存，重试相同命令恢复相同发放请求。
+
+`npm run execution:consume -- run --endpoint <origin>/api/execution/worker-mcp --run-id <run-id> --state-dir <absolute-private-directory>` 使用已有 Worker。`--mode reconcile` 只处理该 Run 已存在 permit；`--message` 只提交有界进度，不授予完成权限。运行态不读取 owner token，不指定 owner/project/注册权限。回复丢失保留稳定 action requestId 和首次进度消息内容；过期 generation 重新 claim，历史 metadata 不复活旧租约。SIGINT/SIGTERM 保存取消意图，只有签名 stop 确认物理关闭才输出 `closed`（exit 0）；`recovery_required`（exit 2）保留持久恢复义务。
+
+用相同 endpoint/Run/state-dir 和受保护 token 输入运行 `revoke`，owner 撤销请求也先持久化并幂等重放。CLI 不输出 secret 或 issuer token；journal 含短期 secret，必须保留私有权限。更换 endpoint 或 Run 使用新的状态目录，现有绑定不可重新指定。实际 Docker fixture 为 `npm run test:execution:consumer:backend`，本地无 daemon 时明确失败，完整验收由有真实 socket 的 CI 运行。

@@ -1,6 +1,6 @@
 # 原生执行接口衔接评估
 
-本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。Worker 身份、owner 发放/撤销、两个受限查询工具、SQLite 写事务 guard、generation 租约与六个动作已在本地源码实施；持久 consumer 仍属拟实施合同。MCP 字节分页与原生客户端有界读取已实施，现役后端已校验查询对象与整组收据的 owner/permitId/runId 绑定，并支持受信任 adapter 的 Run 范围限制。安装功能以现役源码及[功能清单](FEATURES.md)为准。
+本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。Worker 身份、owner 发放/撤销、两个受限查询工具、SQLite 写事务 guard、generation 租约与六个动作已在本地源码实施；持久 consumer 已在本地源码实施，实际 Docker Worker 路径由专用 mandatory fixture 验收。MCP 字节分页与原生客户端有界读取已实施，现役后端已校验查询对象与整组收据的 owner/permitId/runId 绑定，并支持受信任 adapter 的 Run 范围限制。安装功能以现役源码及[功能清单](FEATURES.md)为准。
 
 ## 现役执行链与身份
 
@@ -26,7 +26,7 @@ Docker permit 的原子插入、合同/授权/预算绑定和物理占用在 [di
 | `/api/execution/worker-mcp` | Run 专属八工具与独立 Worker token | 已实现精确 machine route、Worker 认证、两个只读 Run 工具及六个 generation 租约动作。 |
 | Worker SQL 与 guard | credentials、leases、actions、checks 四表；generation/请求唯一索引；写事务前后检查 | `007_execution_workers.sql` 建立 credentials/checks，`008_execution_worker_leases.sql` 建立 leases/actions；前后 guard 接入 `LocalDatabase.batch`，追加当前 lease/generation/action 权限条件。 |
 | 固定操作后端 | permit-bound receipt ingestion、受限历史 reconcile | owner/受信任 adapter 与 Worker 动作均采用现役 permit 收据绑定；Worker historical reconcile 只处理已有委派 Run permit。 |
-| consumer CLI | secret/ID 先持久化、flock、原子 journal、幂等重试 | 待实施：本地 API token bootstrap/revoke、Worker runtime 和固定 machine transport。 |
+| consumer CLI | secret/ID 先持久化、flock、原子 journal、幂等重试 | 已实现：本地 API token bootstrap/revoke、Run 专属 Worker runtime、固定 machine transport、私有 journal 与 kernel flock。 |
 | MCP 查询 | UTF-8 双表示 envelope 预算、按字节分页 | 已实施具名查询 options 与完整 UTF-8 响应边界，保留可信 project 链与游标作用域；下载包的客户端刷新安装后采用相同边界。 |
 
 ### 本地账户派生 Worker
@@ -71,13 +71,13 @@ B2 的 execute claim/start/renew/report 在每次写事务核实当前审批、T
 
 start/complete/cancel 在外部请求前保留 pending action，安全结果完成后保存不可变响应。真实签名 result 未就绪返回 `INVALID_EVIDENCE`，不能用调用者 state/evidence 宣告完成；cancel_fence 和 stop 分别代表取消栅栏和物理关闭。外部 HTTP 与 SQLite 不是同一事务：后端已接受而 issuer/lease 随后失效时，后续数据库写入被拒绝，保留 immutable permit 与 pending action，由有效 historical reconcile 或 owner recovery 对账。完成缓存仍受当前 credential/lease/generation 校验；再次获取更新的 stop 状态须使用新 action requestId。
 
-### consumer 拟实施持久状态与恢复
+### 原生 consumer 持久状态与恢复
 
-拟采用 [consumer-state.mjs:7][pr-state] 的 Linux flock/proc 排他、私有目录/文件、原子且 fsynced journal 和串行写入；采用 [consumer.mjs:52][pr-bootstrap] 的请求前保存 secret/ID、[:92][pr-actions] 的稳定 action requestId，以及 [:102][pr-claim] 的 claim/restart。运行态 journal 保留最小 Worker 凭据、lease generation 和待重放动作。
+本地原创 [consumer-state.mjs](../runner/consumer-state.mjs) 使用私有 0700 目录、0600 文件与 pinned `/proc/self/fd` 目录句柄。消费者持有继承文件描述符的 kernel flock；退出或 SIGKILL 自动释放，锁文件不删除。journal 写入串行执行临时文件 fsync、rename、目录 fsync，失败后停止使用状态；严格绑定版本、canonical endpoint 和唯一 Run。实际子进程验证排他、崩溃与 rename 前后恢复。
 
-本地 bootstrap/revoke 从受保护文件或 fd 读取 43 字符 API token，运行态使用 Run 专属 Worker 凭据。transport endpoint 与请求 allowlist 采用 `/api/execution/worker-mcp` 和 `/api/execution/workers`，精确 Host/Origin 按本地配置校验；参考 [consumer token 解析][pr-consumer-token] 与 [consumer-transport.mjs:13][pr-transport] 的接入位置。journal 记录版本与 endpoint/Run 绑定，用掉包恢复测试证明请求重放保持相同合同。
+[consumer.mjs](../runner/consumer.mjs) 的 bootstrap/revoke 从受保护文件或 fd 读取 43 字符 API token，API token 不落 journal、不输出；运行态使用 Run 专属 Worker 凭据。Worker/lease secret、ID 与 action requestId 在 HTTP 请求前 fsync 持久化，回复丢失后保持相同请求。transport endpoint 与请求 allowlist 采用 `/api/execution/worker-mcp` 和 `/api/execution/workers`，精确 Host/Origin 按本地配置校验；参考 [consumer token 解析][pr-consumer-token] 与 [consumer-transport.mjs:13][pr-transport] 的接入位置。[consumer-transport.mjs](../runner/consumer-transport.mjs) 原创实现固定端点和八工具清单、16 KiB ingress、1 MiB 流式 fatal UTF-8 response、禁止重定向与 2.5 秒 timeout；安全 typed error 保留 domain code，不返回原始秘密或服务错误。journal 掉包恢复测试证明请求重放保持相同合同。
 
-参考 consumer 每 2 秒续租、单请求 timeout 2.5 秒、6 秒 lease、最多 60 秒轮询，见 [:136][pr-renew] 和 [:154][pr-poll]。这四个期限须在真实并发、回复丢失、SIGINT/SIGTERM、授权失效及重启场景中验证；consumer 轮询窗口与后端 permit 的 immutable deadline 分别生效。停止确认来自签名后端收据。
+参考 consumer 每 2 秒续租、单请求 timeout 2.5 秒、6 秒 lease、最多 60 秒轮询，见 [:136][pr-renew] 和 [:154][pr-poll]。本地 consumer 使用独立 2 秒续租 timer，单次续租不重叠，journal 串行更新防止旧 generation 回复覆盖新租约；正常轮询的 60 秒起点持久化，重启不会延长窗口。SIGINT/SIGTERM 或轮询超时保存停止意图，进行最多 6 秒的取消/历史对账收尾。只有可信 stop 与 `closed_at` 才返回 `closed`；Worker/issuer 失效或停止未确认返回 `recovery_required`（exit 2）并保留 journal，供有效历史 consumer 或 owner recovery 继续对账。consumer 窗口、租约和 permit immutable deadline 各自独立。
 
 ### MCP 字节预算与项目隔离
 
@@ -104,13 +104,13 @@ owner 与项目 connector 都在返回前检查完整 envelope。owner [MCP rout
 
 已实施的收据查询绑定与受信任 Run 范围限制由 `tests/execution/backend-http.test.mjs` 使用新临时 SQLite、合成签名密钥和真实 loopback 协议 peer 验证；该 fixture 不代表实际 Docker 执行。
 
-Worker 身份链使用 `npm run test:execution:workers`：新临时 SQLite、本地随机账户 token 和真实 Next loopback 端点覆盖 owner/machine 分派、八工具范围、issuer 失效、稳定重放/重启及同事务 guard 回滚。其中身份检查不启动后端；租约与动作检查使用真实 fresh SQLite、临时本地账户及实际签名 loopback 协议 peer，不启动 Docker 容器。实现 A 时选择 `test:connectors`、`test:mcp:task-reads` 和相关 `test:execution:domain`；已实施 B2 同时运行 `test:local`、`test:execution:api`、`test:workspace-loop` 与原生 Worker 测试；consumer 测试在 B3 交付时追加。参考 [consumer fixture:7][pr-fixture] 的接入需使用新临时 SQLite、本地测试账户/随机 API token 与 loopback server；协议/consumer 脚本在实际交付时纳入现役 package scripts。代码交付按影响完成 build、tsc、lint；真实 Docker 端到端使用 daemon、锁定镜像和现役签名 fixture，分别验证 result/cancel_fence/stop、后端失败与恢复。具体 harness 及前置条件见 [TESTING.md](TESTING.md)。
+Worker 身份链使用 `npm run test:execution:workers`：新临时 SQLite、本地随机账户 token 和真实 Next loopback 端点覆盖 owner/machine 分派、八工具范围、issuer 失效、稳定重放/重启及同事务 guard 回滚。其中身份检查不启动后端；租约与动作检查使用真实 fresh SQLite、临时本地账户及实际签名 loopback 协议 peer，不启动 Docker 容器。实现 A 时选择 `test:connectors`、`test:mcp:task-reads` 和相关 `test:execution:domain`；已实施 B2 同时运行 `test:local`、`test:execution:api`、`test:workspace-loop` 与原生 Worker 测试；consumer 的 journal/transport/native CLI 测试由 `test:execution:consumer` 承载，专用实际 Docker 测试由 `test:execution:consumer:backend` 承载；CI 在显式 daemon 与锁定镜像准备后单独运行新 Worker 路径。参考 [consumer fixture:7][pr-fixture] 的接入需使用新临时 SQLite、本地测试账户/随机 API token 与 loopback server；协议/consumer 脚本在实际交付时纳入现役 package scripts。代码交付按影响完成 build、tsc、lint；真实 Docker 端到端使用 daemon、锁定镜像和现役签名 fixture，分别验证 result/cancel_fence/stop、后端失败与恢复。具体 harness 及前置条件见 [TESTING.md](TESTING.md)。
 
 ## 来源、许可与证据索引
 
 机制来源为 [PR #39：Complete Run-scoped MCP execution leases and durable consumer](https://github.com/huiyuanXP/agent-task-hub/pull/39)，源码引用固定到 `92bd3ee788c1f22a35ccdacf140030d0463f7937`，通过本地 Git 对象 `git show` 核对。现役合同通过本 worktree 的实际文件核对；外部 PR 状态按私有证据的采集时刻解释。
 
-应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices；模块 A 与本地 Worker 身份/guard/leases/actions 使用原创实现，未复制这些应用模块。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
+应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices；模块 A 与本地 Worker 身份/guard/leases/actions/consumer 使用原创实现，未复制这些应用模块。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
 
 私有研究及历史证据位于主 workspace 的 `.local/evidence/parallel-tickets-20261009/`：
 
