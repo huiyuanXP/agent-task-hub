@@ -19,6 +19,14 @@ npm run accounts -- revoke
 
 客户端只允许被授予的读取、报单、规划和执行能力。`submit` 也允许在绑定项目内按修订更新 Ticket 跟进状态和追加调用方证据，审计与重放规则见[项目 MCP Ticket 状态写回](MCP-TICKET-WRITES.md)。执行能力允许领取本项目的已批准任务，不允许客户端批准自己的任务；跨项目及跨 owner 访问拒绝。
 
-机器认证仅在明确的 enroll、heartbeat、mcp 和 agent 接口处理；安装包下载是公开代码产物，业务记录和连接管理需要认证。客户端继承本机 Codex 默认配置或显式 Profile，模型账户/API 网关认证留在本机，不写进数据库或下载包；已有 provider 配置不要求再次 Device 登录。
+项目客户端机器认证仅在明确的 enroll、heartbeat、mcp 和 agent 接口处理；安装包下载是公开代码产物，业务记录和连接管理需要认证。客户端继承本机 Codex 默认配置或显式 Profile，模型账户/API 网关认证留在本机，不写进数据库或下载包；已有 provider 配置不要求再次 Device 登录。
 
 网页撤销后，工具调用、领取和续租立即拒绝；客户端必须停止失去租约的受管进程。连接历史保留，便于查看注册、通信、错误和执行来源。
+
+## Run 专属 Worker
+
+本地源码提供 `/api/execution/workers` 的 owner 发放、列表与撤销接口，以及独立 `/api/execution/worker-mcp`。发放使用实际浏览器 session 或 API token，绑定其 owner、摘要、原始期限、origin 和唯一冻结 Run；每个 owner 最多 16 个有效 Worker，期限最多 15 分钟并受 issuer 期限约束。调用者不能指定 owner/project 等身份字段。客户端自己保存 secret，服务端只存 verifier；管理响应不返回 secret、verifier 或 issuer 摘要。
+
+Worker token 为 `athw1.<小写UUIDv4>.<43字符secret>`，只在精确 machine 端点接受；任何 cookie、本地 owner token 或项目连接 token 都不能替代它。握手、发现与工具调用检查 exact Host/Origin、owner/Run 绑定及 issuer 当前存在性。注销、撤销本地 token、密码重置、自然到期或 Worker 撤销均使委派失效；写操作的权限条件在 SQLite 同一事务前后核实。
+
+当前 Worker 仅能查询被委派的 Run，未提供领取、启动、续租、完成、取消或 consumer；完整实施边界见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。

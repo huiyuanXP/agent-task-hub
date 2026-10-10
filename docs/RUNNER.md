@@ -22,4 +22,4 @@ Runner journal 保存 permit、真实 deadline、操作和后端状态。重启�
 
 相关检查为 npm run test:execution:domain、npm run test:execution、npm run test:backend:integration。缺少真实 daemon 不应假装 Docker 检查通过；本机开发闭环检查不能替代固定容器隔离检查。
 
-Run 专属 Worker 与持久 consumer 的拟实施合同、原生账户/SQLite 接入和 permit 对账条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
+Run 专属 Worker 身份链目前提供发放、撤销和两个 Run 查询工具；generation 租约、执行动作与持久 consumer 尚待实施，实际 Docker 验收仍需上述 daemon 与镜像。原生账户/SQLite 接入和 permit 对账条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
