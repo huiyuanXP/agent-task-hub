@@ -29,4 +29,4 @@ npm run accounts -- revoke
 
 Worker token 为 `athw1.<小写UUIDv4>.<43字符secret>`，只在精确 machine 端点接受；任何 cookie、本地 owner token 或项目连接 token 都不能替代它。握手、发现与工具调用检查 exact Host/Origin、owner/Run 绑定及 issuer 当前存在性。注销、撤销本地 token、密码重置、自然到期或 Worker 撤销均使委派失效；写操作的权限条件在 SQLite 同一事务前后核实。
 
-当前 Worker 提供两个受限查询和 claim/start/renew/report/complete/cancel 六个动作。动作绑定 6 秒排他 generation、lease secret 与稳定 requestId；execute 要求当前审批、修订、registry 和 permit 期限有效，reconcile 只处理已存在的该 Run permit。consumer 尚待实施；完整实施边界见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
+当前 Worker 提供两个受限查询和 claim/start/renew/report/complete/cancel 六个动作。动作绑定 6 秒排他 generation、lease secret 与稳定 requestId；execute 要求当前审批、修订、registry 和 permit 期限有效，reconcile 只处理已存在的该 Run permit。consumer 使用本地私有 journal 与 kernel flock 保存短期 Worker/lease secret 和待确认请求；bootstrap/revoke 仅从受保护文件或 fd 读取本地 API token，该 token 不落 journal、不进入运行态 MCP；完整实施边界见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
