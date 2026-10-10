@@ -1,0 +1,135 @@
+{
+  "received_material": "Sanitized summary from parent task only; original evidence archive and full transcripts remain in cloud and have not been received on VM1",
+  "evidence_archive_sha256": "6f18c8474a8b30ce2ffc7e18214348dce2a8d0ff3dfbc3835804363ea19cba4e",
+  "date_utc": "2026-10-10",
+  "artifact_repository": "https://github.com/huiyuanXP/agent-task-hub",
+  "artifact_branch": "test/cloud-mcp-portable-20261010",
+  "artifact_commit": "0b4934b3db4bc88fca16465d7ae400c3a2619c82",
+  "original_source_commit": "e5efe30af00ecc2314a6f61835f4c8afef26ae4b",
+  "manifest_file_checks": 43,
+  "original_source_file_checks": 42,
+  "node": "v24.19.0",
+  "model": "gpt-6.1-sol",
+  "reasoning": "low",
+  "classification": "Native model-directed real project MCP stdio/loopback protocol integration. Not configured Codex CLI executor or VM network E2E.",
+  "passed": [
+    "initialize/tools-list",
+    "seed list/get",
+    "three synthetic creates/readbacks",
+    "independent model sum/sort/missing-field processing",
+    "same request-ID idempotency",
+    "wrong-project rejection",
+    "separate result-record create/readback",
+    "normal EOF exit0 and temporary DB cleanup"
+  ],
+  "blocked": {
+    "codex_cli": "0.159.2 existing ChatGPT authentication; failed before any model events: failed to initialize in-process app-server client: Read-only file system (os error 30). No credentials copied or permissions changed."
+  },
+  "product_gaps": [
+    "Existing-ticket status/evidence update tool absent; all five records remain todo revision1.",
+    "No executor tool in enrolled read/submit/plan scope."
+  ],
+  "not_tested": [
+    "actual VM1 remote network/authentication",
+    "executor startup",
+    "web application display/reload",
+    "planning create-idea/claim/save path",
+    "stale-revision writeback rejection because status tool absent"
+  ],
+  "security": {
+    "synthetic_only": true,
+    "no_production_reads_or_writes_in_target_test": true,
+    "mcp_child_auth_env_scrubbed": [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_ACCESS_TOKEN",
+      "NODE_OPTIONS"
+    ],
+    "no_install_or_persistent_mcp_config": true,
+    "fixture_enrollment": "local synthetic temporary SQLite only; raw token never exported",
+    "review_caveat": "Cleanup best-effort on normal EOF/signals/timeout; SIGKILL not guaranteed. Source isolation is not an OS sandbox."
+  },
+  "closeout": {
+    "code": "verified-current at artifact/source commits",
+    "runtime": "verified-current synthetic local supported protocol subset only",
+    "documentation": "evidence current; project owner needs to commit sanitized result to project branch",
+    "rules": "project execution/allocation boundaries preserved; no rule changes",
+    "memory": "out-of-scope",
+    "workspace": "synthetic DB cleanup verified; review evidence retained; source checkout unmodified"
+  },
+  "results": {
+    "test_type": "native model-driven MCP protocol integration",
+    "protocolVersion": "2025-11-25",
+    "project": "Cloud MCP synthetic acceptance",
+    "input_ids": {
+      "sum": "ticket_77d5e1916ea16786438b6bad6f0601f7ea3e57d9829c9db0708a8419d57bcec6",
+      "sort": "ticket_1e52e966560e0ae20ee80613b9d3353150877098139842e8ee953acf7d194acc",
+      "missing": "ticket_a4c4fd9acc72c3fb2148e00ca177daec7d68624da6e111fbc407bc99ba5fc8ea"
+    },
+    "results": {
+      "sum": 21,
+      "sum_reason": "3 + 7 = 10; 10 + 11 = 21",
+      "sort": [
+        1,
+        2,
+        9,
+        9
+      ],
+      "sort_reason": "Ascending order, retaining both occurrences of 9",
+      "missing": {
+        "required_field": "delivery_date",
+        "status": "missing_required_input",
+        "value": null,
+        "invented": false
+      }
+    },
+    "checks": {
+      "initialize": true,
+      "tools_list": true,
+      "seed_list_and_get": true,
+      "three_create_and_get": true,
+      "sum_retry_same_id": true,
+      "sum_count_after_retry": 1,
+      "total_tickets_after_retry": 4,
+      "next_cursor": null,
+      "scope_rejected": true,
+      "scope_error": "Connector project denied",
+      "result_record_create_and_readback": true
+    },
+    "limitations": [
+      "No existing-ticket status or evidence update tool exposed; inputs remain todo.",
+      "No executor startup or execution authorized or tested.",
+      "No configured Codex CLI tool discovery tested.",
+      "No UI or user VM network stage tested."
+    ],
+    "result_record_separate": true,
+    "result_record_id": "ticket_03dfe80f66c4ca4c989d15579140addc484362c497396179157f0db8d3fcc1c9",
+    "rpc_calls": 15,
+    "broker_close": {
+      "exit_code": 0,
+      "response": "{\"closed\":true}"
+    }
+  },
+  "assertions": {
+    "protocol_call_count": true,
+    "fixture_exit_zero": true,
+    "all_expected_success_except_scope": true,
+    "exact_four_created_plus_seed": true,
+    "all_records_revision_one_todo": true,
+    "declared_ids_match_saved_records": true,
+    "sum": true,
+    "sort": true,
+    "missing_input_not_fabricated": true,
+    "status_update_absent": true,
+    "fixture_synthetic_only": true,
+    "temporary_db_cleanup": true
+  },
+  "sha256": {
+    "native-model-result.json": "ce7d20117e735a1f8bf39d95821a1e2de6041f3a292dbd61e210e1cbe286de5b",
+    "assertions.json": "eb681600d068b55de6d79ed08615cebc3725cca7392eb1282b90d4a87538a0f9",
+    "model-protocol-transcript.json": "9d20a07b1c58c2bd99143354c6ee0662e5266bde2836fc03b9150e29257295fe",
+    "preflight-transcript.json": "bd3fa6ef1dcfadc07232664fdaafe5698311490d316a754073f1524b7dbea0a2",
+    "model-stderr.txt": "8e3330eeb312ddb37b9da73c3ece4a8aa7e2ade4b7bb255573aa487bc89f0f58",
+    "model-fixture/0d4eedbd-ca25-401a-b23d-6bd9d669ad4a.json": "c95b208ecd81e09f44282bc39ca19d3200972314808cc40170fe659ee35bb52e"
+  }
+}
