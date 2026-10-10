@@ -51,6 +51,7 @@
 ## 连接与执行
 
 - 为指定项目和能力生成短期一次性安装授权码。
+- owner 可通过本地接口发放、查看与撤销 Run 专属短期 Worker，独立 machine MCP 提供两个委派 Run 查询与六个租约动作；原生 consumer 采用私有 journal/flock、请求前持久化和稳定重放；真实 Docker 验收由专用 fixture 与 CI 分别记录。
 - 点击下载独立的 MCP/CLI 客户端包，或读取网页和 JSON 安装指南。
 - 安装器将项目关联到工坊并写入增量 MCP 配置，不覆盖其他连接。
 - 使用 STDIO MCP 提交点子或 Ticket，以及读取、领取和回写被授予的本项目任务。
