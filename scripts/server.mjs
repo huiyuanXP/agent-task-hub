@@ -44,7 +44,7 @@ const server = createServer(async (req, res) => {
     }
 
     // These exact machine endpoints authenticate their own credentials in-route.
-    const service = new Set(['/api/execution/checkpoint','/api/connector/enroll','/api/connector/heartbeat','/api/connector/mcp','/api/connector/agent']).has(url.pathname);
+    const service = new Set(['/api/execution/checkpoint','/api/execution/worker-mcp','/api/connector/enroll','/api/connector/heartbeat','/api/connector/mcp','/api/connector/agent']).has(url.pathname);
     const publicDownload = url.pathname === '/api/connectors/download' && ['GET','HEAD'].includes(req.method ?? 'GET');
     if (!service) {
       const protectedRoute =
