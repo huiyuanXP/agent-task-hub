@@ -17,7 +17,7 @@ node --experimental-strip-types tests/connectors/project-catalog-browser.mjs
 
 浏览器检查需要 tests/browser 的锁文件安装和 Chromium。npm run test:integration 在独立目录安装并构建，再运行真实 API/MCP/浏览器检查；中断会清理所拥有的服务，失败证据保留在 test-results。
 
-npm run test:execution:domain 运行不依赖 Docker 的执行领域检查。npm run test:execution 和 npm run test:backend:integration 要求真实 Docker daemon、flock、proc 和锁定 Node 镜像；本机缺少它们时明确报告，CI 仍保留完整 Docker 检查。
+npm run test:execution:domain 运行不依赖 Docker 的执行领域检查。npm run test:execution 和 npm run test:backend:integration 要求真实 Docker daemon、flock、proc 和锁定 Node 镜像；本机缺少它们时明确报告，CI 仍保留完整 Docker 检查。 签名传输回归还覆盖大 emoji 请求在 UTF-8 网络分块边界保持原始字节；真实后端测试代理以 Buffer 拼接，保留签名与 Content-Length，并记录安全的状态/字节诊断。
 
 `npm run test:mcp:task-read-bytes` 使用新临时 SQLite 和真实本地 owner/project HTTP 端点验证完整 4 MiB UTF-8 envelope、双表示计费、详情共享预算、字节 continuation、项目隔离和超大单项错误；`npm run test:connectors` 包含实际 loopback/STDIO 流式读取、多字节分块、超限取消与协议行预算检查。它们不替代 Docker 实测。
 
