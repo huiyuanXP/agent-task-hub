@@ -809,6 +809,16 @@ export default function Home() {
                         </button>
                         <p className="idea-text">{i.text}</p>
                         <PlanningStatus job={job} now={planningNow} />
+                        {job.delivery === "no_subscription" && job.status !== "done" && (
+                          <div className="planning-next-step">
+                            <p>点子已保存。接入「{i.project || "通用"}」项目的 Agent 后会自动领取规划；也可以先手工整理成 Plan。</p>
+                            <button className="secondary" type="button" onClick={() => {
+                              setProject(i.project || "通用");
+                              setQuery("");
+                              setView("integrations");
+                            }}>接入项目 Agent</button>
+                          </div>
+                        )}
                         <div className="idea-footer">
                           <button
                             className="text-btn"
@@ -898,24 +908,15 @@ export default function Home() {
                   ))}
                 </div>
               )}
-              {view === "board" && (
-                <details className="workspace-section" open>
-                <summary>固定 Docker 操作与独立执行授权</summary>
-                <AuthorizationPanel
-                  key={session?.user.userId ?? "anonymous"}
-                  tickets={tickets}
-                  onAuthenticationDenied={panelAuthenticationDenied}
-                />
-                </details>
-              )}
-              {["board", "review", "runs"].includes(view) && (
-                <DevelopmentPanel
-                  key={session?.user.userId ?? "anonymous"}
-                  tickets={tickets}
-                  project={project}
-                  onAuthenticationDenied={panelAuthenticationDenied}
-                  onRecordsChanged={() => void load(true)}
-                />
+              {view === "board" && filtered(tickets).length === 0 && (
+                <div className="empty">
+                  <h3>{query || project !== "全部项目" ? "没有匹配的 Ticket" : "先把想法变成一个 Ticket"}</h3>
+                  <p>从点子整理目标、范围和验收，再拆成任务；已有明确任务也可以直接创建。</p>
+                  <div className="card-actions">
+                    <button className="primary" type="button" onClick={() => { setQuery(""); setView("inbox"); }}>从点子开始</button>
+                    <button className="secondary" type="button" onClick={() => setDraft({ ...empty("ticket"), project: project === "全部项目" ? "通用" : project })}>创建第一个 Ticket</button>
+                  </div>
+                </div>
               )}
               {view === "board" && (
                 <div className={"board " + (list ? "as-list" : "")}>
@@ -1018,10 +1019,33 @@ export default function Home() {
                     </p>
                   </div>
                 )}
+              {view === "board" && (
+                <details className="workspace-section">
+                <summary>固定 Docker 操作与独立执行授权</summary>
+                <AuthorizationPanel
+                  key={session?.user.userId ?? "anonymous"}
+                  tickets={tickets}
+                  onAuthenticationDenied={panelAuthenticationDenied}
+                />
+                </details>
+              )}
+              {["board", "review", "runs"].includes(view) && (
+                <details className="workspace-section" open={tickets.length > 0}>
+                <summary>本机 Agent 开发执行 · 申请、进度与验收</summary>
+                <DevelopmentPanel
+                  key={session?.user.userId ?? "anonymous"}
+                  tickets={tickets}
+                  project={project}
+                  onAuthenticationDenied={panelAuthenticationDenied}
+                  onRecordsChanged={() => void load(true)}
+                />
+                </details>
+              )}
               {view === "integrations" && (
                 <ConnectionPanel
                   key={session?.user.userId ?? "anonymous"}
                   projects={projects}
+                  initialProject={project === "全部项目" ? "通用" : project}
                   onAuthenticationDenied={panelAuthenticationDenied}
                 />
               )}

@@ -11,12 +11,13 @@ const states: Record<string, string> = {
 const capabilityNames: Record<string, string> = { read: "读取项目", submit: "报点子 / Ticket", plan: "规划", execute: "开发执行" };
 const shell = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 
-export function ConnectionPanel({ projects, onAuthenticationDenied }: {
+export function ConnectionPanel({ projects, initialProject = "通用", onAuthenticationDenied }: {
   projects: string[];
+  initialProject?: string;
   onAuthenticationDenied: () => void;
 }) {
   const [data, setData] = useState<ConnectionList>({ connections: [], projects: [] });
-  const [project, setProject] = useState("通用"), [name, setName] = useState("我的 workspace");
+  const [project, setProject] = useState(initialProject), [name, setName] = useState("我的 workspace");
   const [capabilities, setCapabilities] = useState(["read", "submit", "plan", "execute"]);
   const [invite, setInvite] = useState<{ code: string; expiresAt: number; origin: string; project: string } | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
