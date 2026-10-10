@@ -5,7 +5,8 @@ import type { WorkerIssuer, WorkerPrincipal } from './worker-types.mts';
 import { issuerAuthorizationPredicate, workerAuthorizationPredicate } from './worker-auth.mts';
 import { ExecutionError } from './errors.mts';
 
-type Predicate = { sql: string; values: SqlValue[] };
+export type WorkerGuardPredicate = { sql: string; values: SqlValue[] };
+type Predicate = WorkerGuardPredicate;
 const denied = () => new ExecutionError('AUTHORIZATION_DENIED', 'Worker delegation is no longer valid', 403);
 
 /** Statements stay tied to this wrapper and its original SQLite handle. */
@@ -60,6 +61,8 @@ export function guardedIssuerDatabase(db: LocalDatabase, issuer: WorkerIssuer): 
   return guardedDatabase(db, issuerAuthorizationPredicate({ ...issuer }));
 }
 /** Every consequential Worker write checks the whole delegation inside SQLite. */
-export function guardedWorkerDatabase(db: LocalDatabase, principal: WorkerPrincipal): ExecutionDatabase {
-  return guardedDatabase(db, workerAuthorizationPredicate({ ...principal }));
+export function guardedWorkerDatabase(db: LocalDatabase, principal: WorkerPrincipal, extraPredicate?: WorkerGuardPredicate): ExecutionDatabase {
+  const base = workerAuthorizationPredicate({ ...principal });
+  const predicate = extraPredicate ? { sql: `(${base.sql}) AND (${extraPredicate.sql})`, values: [...base.values, ...extraPredicate.values] } : base;
+  return guardedDatabase(db, predicate);
 }

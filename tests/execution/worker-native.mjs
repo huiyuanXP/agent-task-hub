@@ -62,9 +62,10 @@ async function provision(runId, issuerToken = f.aliceToken) {
   result.worker = (await expect(201, management, { token: issuerToken, body: result.body })).json.worker;
   return result;
 }
-function noPrivate(response, worker, issuerToken = f.aliceToken, owner = f.alice.userId) {
+function noPrivate(response, worker, issuerToken = f.aliceToken, owner = f.alice.userId, schema = false) {
   for (const value of [worker.secret, worker.body.verifier, worker.body.requestId, hash(issuerToken), issuerToken, owner]) assert.ok(!response.text.includes(value), 'Private credential or principal escaped');
   for (const key of ['issuerTokenHash', 'issuer_token_hash', 'issuerExpiresAt', 'issuer_expires_at', 'verifier', 'secret', 'input_key', 'request_id', 'revoke_request_id', 'owner', 'actor', 'lastActor', 'evidence']) {
+    if (schema && key === "verifier") continue;
     assert.ok(!new RegExp(`"${key}"\\s*:`).test(response.text), `Private field escaped: ${key}`);
   }
   assert.match(response.cache, /no-store/);
@@ -160,9 +161,9 @@ try {
   assert.equal(initialized.json.result.serverInfo.name, 'agent-task-hub-worker'); noPrivate(initialized, worker);
   for (const method of ['discover', 'tools/list']) {
     const response = await rpc(worker.token, method);
-    assert.deepEqual(response.json.result.tools.map(tool => tool.name), ['get_execution_run', 'list_execution_runs']); noPrivate(response, worker);
+    assert.deepEqual(response.json.result.tools.map(tool => tool.name), ['get_execution_run', 'list_execution_runs', 'claim_execution_run', 'start_execution_run', 'renew_execution_run', 'report_execution_run', 'complete_execution_run', 'cancel_execution_run']); noPrivate(response, worker, f.aliceToken, f.alice.userId, true);
   }
-  for (const name of ['claim_execution_run', 'start_execution_run', 'renew_execution_run', 'report_execution_run', 'complete_execution_run', 'cancel_execution_run', 'renew_execution_lease', 'release_execution_lease', 'reconcile_execution_run', 'create_execution_run', 'prepare_execution', 'decide_authorization', 'delete_record']) deniedRPC(await call(worker.token, name, { runId: assigned.id }));
+  for (const name of ['renew_execution_lease', 'release_execution_lease', 'reconcile_execution_run', 'create_execution_run', 'prepare_execution', 'decide_authorization', 'delete_record']) deniedRPC(await call(worker.token, name, { runId: assigned.id }));
   const list = await call(worker.token, 'list_execution_runs');
   assert.deepEqual(list.json.result.structuredContent.runs.map(run => run.id), [assigned.id]); noPrivate(list, worker);
   assert.deepEqual(JSON.parse(list.json.result.content[0].text), list.json.result.structuredContent);
