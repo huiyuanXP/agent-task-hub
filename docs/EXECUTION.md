@@ -35,4 +35,4 @@
 
 资源预算和输入/产物 manifest 在准备与执行端校验；登记操作漂移、过期授权、撤销和 Ticket 修订变化阻止新开始。容器网络、文件系统、时限和实际产物由固定 Runner 管理。详见 [RUNNER.md](RUNNER.md)。
 
-workspace Agent 租约承载独立的本地开发协议。Run 专属 Worker 的 owner 发放/撤销、独立身份及两个受限查询工具已在本地源码实现；Run generation 租约、动作与 consumer 尚待实施。完整合同及接入条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。
+workspace Agent 租约承载独立的本地开发协议。Run 专属 Worker 的 owner 发放/撤销、独立身份、两个受限查询与六个租约动作已在本地源码实现。6 秒 generation 租约与 action ledger 在独立表中推进；consumer 尚待实施，真实 Docker 验收仍需实际 daemon 与锁定镜像。完整合同及接入条件见[原生执行接口衔接评估](EXECUTION-INTEGRATION.md)。

@@ -24,7 +24,7 @@ npm run test:execution:domain 运行不依赖 Docker 的执行领域检查。npm
 
 `npm run test:mcp:task-read-bytes` 使用新临时 SQLite 和真实本地 owner/project HTTP 端点验证完整 4 MiB UTF-8 envelope、双表示计费、详情共享预算、字节 continuation、项目隔离和超大单项错误；`npm run test:connectors` 包含实际 loopback/STDIO 流式读取、多字节分块、超限取消与协议行预算检查。它们不替代 Docker 实测。
 
-`npm run test:execution:workers` 验证原生 Worker 身份链：fresh SQLite 与实际临时账户 token、真实 Next loopback owner/machine 路由、Unicode Run 合同、16 KiB ingress、两工具范围、丢失回复重放、重启、撤销与自然失效，以及同事务 guard/跨句柄拒绝/失败零残留。它只验身份与查询，不代表 generation 租约、consumer 或 Docker 实证完成。
+`npm run test:execution:workers` 验证原生 Worker 身份链：fresh SQLite 与实际临时账户 token、真实 Next loopback owner/machine 路由、Unicode Run 合同、16 KiB ingress、八工具范围、丢失回复重放、重启、撤销与自然失效，以及同事务 guard/跨句柄拒绝/失败零残留。generation/lease/action 检查使用真实 fresh SQLite；签名 loopback peer 验证原生 start/result/cancel 协议、整组收据、断连与失效竞态。consumer 尚待实施；这些 peer 回执不代表真实 Docker 实证。
 
 只运行与实际变更相关、能验证行为的检查；通过后不重复整套测试，除非又有变更、失败或尚未解决的问题。
 

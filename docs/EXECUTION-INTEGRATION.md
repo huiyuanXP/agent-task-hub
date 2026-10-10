@@ -1,6 +1,6 @@
 # 原生执行接口衔接评估
 
-本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。Worker 身份、owner 发放/撤销、两个受限查询工具与 SQLite 写事务 guard 已在本地源码实施；generation 租约、六个动作与持久 consumer 仍属拟实施合同。MCP 字节分页与原生客户端有界读取已实施，现役后端已校验查询对象与整组收据的 owner/permitId/runId 绑定，并支持受信任 adapter 的 Run 范围限制。安装功能以现役源码及[功能清单](FEATURES.md)为准。
+本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。Worker 身份、owner 发放/撤销、两个受限查询工具、SQLite 写事务 guard、generation 租约与六个动作已在本地源码实施；持久 consumer 仍属拟实施合同。MCP 字节分页与原生客户端有界读取已实施，现役后端已校验查询对象与整组收据的 owner/permitId/runId 绑定，并支持受信任 adapter 的 Run 范围限制。安装功能以现役源码及[功能清单](FEATURES.md)为准。
 
 ## 现役执行链与身份
 
@@ -23,9 +23,9 @@ Docker permit 的原子插入、合同/授权/预算绑定和物理占用在 [di
 | 接口或模块 | 采用的机制 | 原生接入与实施状态 |
 | --- | --- | --- |
 | `/api/execution/workers` | owner provision/list/revoke，稳定 requestId、有限发放、secret verifier | 已实现本地 session/API token 发放、有限发行及幂等撤销，绑定 owner、origin、issuer 摘要/期限和冻结 Run；owner/project 从可信数据解析。 |
-| `/api/execution/worker-mcp` | Run 专属八工具与独立 Worker token | 已实现精确 machine route 与 Worker 认证，只声明及允许两个只读 Run 工具；六个租约动作尚未实现。 |
-| Worker SQL 与 guard | credentials、leases、actions、checks 四表；generation/请求唯一索引；写事务前后检查 | `007_execution_workers.sql` 已建立 credentials/checks，前后 guard 接入 `LocalDatabase.batch`；leases/actions 待实施。 |
-| 固定操作后端 | permit-bound receipt ingestion、受限历史 reconcile | owner/受信任 adapter 的现役 permit 收据绑定已实现；Worker 租约动作与历史 reconcile 待实施。 |
+| `/api/execution/worker-mcp` | Run 专属八工具与独立 Worker token | 已实现精确 machine route、Worker 认证、两个只读 Run 工具及六个 generation 租约动作。 |
+| Worker SQL 与 guard | credentials、leases、actions、checks 四表；generation/请求唯一索引；写事务前后检查 | `007_execution_workers.sql` 建立 credentials/checks，`008_execution_worker_leases.sql` 建立 leases/actions；前后 guard 接入 `LocalDatabase.batch`，追加当前 lease/generation/action 权限条件。 |
+| 固定操作后端 | permit-bound receipt ingestion、受限历史 reconcile | owner/受信任 adapter 与 Worker 动作均采用现役 permit 收据绑定；Worker historical reconcile 只处理已有委派 Run permit。 |
 | consumer CLI | secret/ID 先持久化、flock、原子 journal、幂等重试 | 待实施：本地 API token bootstrap/revoke、Worker runtime 和固定 machine transport。 |
 | MCP 查询 | UTF-8 双表示 envelope 预算、按字节分页 | 已实施具名查询 options 与完整 UTF-8 响应边界，保留可信 project 链与游标作用域；下载包的客户端刷新安装后采用相同边界。 |
 
@@ -43,28 +43,33 @@ owner Worker 管理 route 使用 `authenticateHeaders`/受信任 session 和实�
 
 ### 原生 SQLite 与原子权限检查
 
-`node:sqlite` 的数据库句柄使用 WAL、外键和 `BEGIN IMMEDIATE`；迁移名及 SQL checksum 由 `schema_migrations` 跟踪，重启只应用新增 SQL，见 [database.mts:27](../lib/database.mts#L27)。[007_execution_workers.sql](../migrations/007_execution_workers.sql) 已追加 credentials/checks，并校验 local owner、冻结 Run、verifier/expiry、稳定发放/撤销请求及不可变绑定；generation 与租约/action 请求索引仍待后续迁移。issuer token 摘要不设阻碍注销删除的外键，guard 在每次调用和写事务验证其当前存在性。
+`node:sqlite` 的数据库句柄使用 WAL、外键和 `BEGIN IMMEDIATE`；迁移名及 SQL checksum 由 `schema_migrations` 跟踪，重启只应用新增 SQL，见 [database.mts:27](../lib/database.mts#L27)。[007_execution_workers.sql](../migrations/007_execution_workers.sql) 已追加 credentials/checks，并校验 local owner、冻结 Run、verifier/expiry、稳定发放/撤销请求及不可变绑定；[008_execution_worker_leases.sql](../migrations/008_execution_worker_leases.sql) 追加 generation 排他和 lease/action 请求索引，以及冻结绑定、期限与完成响应不可变约束。issuer token 摘要不设阻碍注销删除的外键，guard 在每次调用和写事务验证其当前存在性。
 
 [worker-guard.mts](../lib/execution/worker-guard.mts) 已通过同事务检查行前后验证、WeakMap 解包及失败 CHECK 回滚接入原生 batch。`LocalDatabase.batch` 只接收同句柄原始 Statement，见 [database.mts:58](../lib/database.mts#L58)；包装器将 prepare/bind/run/batch 的语句解包后交给该句柄，first/all 只允许 SELECT，拒绝以 RETURNING 绕过写检查。验证覆盖跨句柄拒绝、撤销/自然到期紧邻 mutation、并发 guard 及零残留检查行；预读结果与 JS 时间各用于展示，写权限以事务条件为准。
 
-### Worker 查询与拟实施动作
+### Worker 查询与租约动作
 
-当前两个查询工具的 schema 见 [worker-mcp.mts](../lib/execution/worker-mcp.mts)。其余工具的拟实施 schema 参考 [worker-mcp.mts:12][pr-tools]，租约与 action 机制参考 [leases.mts:15][pr-leases]。拟实施的 leased action 绑定 `runId/requestId/leaseToken`，lease token 为 `athl1.<leaseId>.<generation>.<secret>`；同 requestId 重放返回绑定原内容的响应，内容变化产生幂等冲突。
+八个工具的严格 schema 见 [worker-mcp.mts](../lib/execution/worker-mcp.mts)，本地租约与 action 实现在 [worker-leases.mts](../lib/execution/worker-leases.mts)、[worker-action-store.mts](../lib/execution/worker-action-store.mts) 和 [worker-actions.mts](../lib/execution/worker-actions.mts)。leased action 绑定 `runId/requestId/leaseToken`，lease token 为 `athl1.<leaseId>.<generation>.<secret>`；同 requestId 重放返回绑定原内容的响应，内容变化产生幂等冲突。
 
 | 工具 | 合同及当前状态 | 实施验证 |
 | --- | --- | --- |
 | `get_execution_run` | 已实现：只读委派 Run 及现存 permit deadline/cancel/closed 摘要 | foreign Run 拒绝，读取前后状态和占用一致。 |
 | `list_execution_runs` | 已实现：仅返回 Worker 唯一委派 Run | owner 列表使用 owner 查询；隐藏工具的显式调用也拒绝。 |
-| `claim_execution_run` | 待实施：client 先持久化 lease secret/verifier/requestId；6 秒排他 generation；execute 校验当前 approval/registry/revision，reconcile 要求该 Run 历史 permit | 两消费者唯一 winner、回复丢失恢复、到期接替、旧 generation 拒绝。 |
-| `start_execution_run` | 待实施：当前 execute lease 调用现役 dispatch/start；采用相同不可变 permit | scope/budget/revision/registry/expiry 和占用检查；重启保持同 permit/deadline。 |
-| `renew_execution_run` | 待实施：当前 execute generation、有效派生 credential 与当前 approval；幂等响应绑定 exact expiry | 自然到期/撤销竞态，同请求重试只采用原 expiry；reconcile lease 的 renew 拒绝。 |
-| `report_execution_run` | 待实施：最多 2048 字符 message 的幂等 action receipt；状态由领域和后端控制 | 拒绝未知 state/evidence 字段、超限消息和终态报告。 |
-| `complete_execution_run` | 待实施：获取原 permit 的可信 result，交由现役对账和 attestation ingestion | foreign signed receipt 拒绝；后端结果待就绪返回真实 `INVALID_EVIDENCE`。 |
-| `cancel_execution_run` | 待实施：当前 lease 请求取消，分别记录逻辑 cancelled 与物理关闭收据 | 分别验证 result/cancel_fence/stop；历史 reconcile 仅处理已有 permit。 |
+| `claim_execution_run` | 已实现服务端：client 须先持久化 lease secret/verifier/requestId；6 秒排他 generation；execute 校验当前 approval/registry/revision，reconcile 要求该 Run 历史 permit | 两消费者唯一 winner、回复丢失恢复、到期接替、旧 generation 拒绝。 |
+| `start_execution_run` | 已实现：当前 execute lease 调用现役 dispatch/start；采用相同不可变 permit | scope/budget/revision/registry/expiry 和占用检查；重启保持同 permit/deadline。 |
+| `renew_execution_run` | 已实现：当前 execute generation、有效派生 credential 与当前 approval；幂等响应绑定 exact expiry | 自然到期/撤销竞态，同请求重试只采用原 expiry；reconcile lease 的 renew 拒绝。 |
+| `report_execution_run` | 已实现：最多 2048 字符 message 的幂等 action receipt；状态由领域和后端控制 | 拒绝未知 state/evidence 字段、超限消息和终态报告。 |
+| `complete_execution_run` | 已实现：获取原 permit 的可信 result，交由现役对账和 attestation ingestion | foreign signed receipt 拒绝；后端结果待就绪返回真实 `INVALID_EVIDENCE`。 |
+| `cancel_execution_run` | 已实现：当前 lease 请求取消，分别记录逻辑 cancelled 与物理关闭收据 | 分别验证 result/cancel_fence/stop；历史 reconcile 仅处理已有 permit。 |
 
-拟实施的 Docker 租约 generation 与现役 workspace 的 30 秒租约各在自己的表和状态机中推进。后续动作需确保：执行 approval 失效后，有效 Worker credential 可使用历史 reconcile 完成/取消已有 permit；Worker 或其 issuer 已失效时，恢复由 owner 路径处理。reconcile 保持既有 deadline 和操作范围。
+已实现的 Docker 租约 generation 与现役 workspace 的 30 秒租约各在自己的表和状态机中推进。动作保持以下条件：执行 approval 失效后，有效 Worker credential 可使用历史 reconcile 完成/取消已有 permit；Worker 或其 issuer 已失效时，恢复由 owner 路径处理。reconcile 保持既有 deadline 和操作范围。
 
-后端接入保留 [backend-http.mts:35][pr-backend] 的 receipt `permitId/runId` 与当前查询对象匹配，以及 [:68][pr-reservation]、[:83][pr-run-scope] 的受信任 `executionRunId` 限制。现役后端在任何收据入库前[校验整组 receipt](../lib/execution/backend-http.mts#L35) 与查询 permit 的 owner/permitId/runId 一致；ingestion 继续校验签名与 receipt 自身绑定，见 [attestations.mts:55](../lib/execution/attestations.mts#L55)。受信任 adapter 可在 `AuthorizationContext.executionRunId` 绑定唯一 Run；[HTTP 与 reconcile](../lib/execution/backend-http.mts#L89) 在读取或写入前拒绝其他 Run，绑定主体不恢复前任 Run 的物理占用。该字段只由服务端传入，Worker machine 目前仅查询且不调用 backend mutation；owner recovery 仍关闭前任物理占用，见 [backend-http.mts:75](../lib/execution/backend-http.mts#L75)。
+后端接入保留 [backend-http.mts:35][pr-backend] 的 receipt `permitId/runId` 与当前查询对象匹配，以及 [:68][pr-reservation]、[:83][pr-run-scope] 的受信任 `executionRunId` 限制。现役后端在任何收据入库前[校验整组 receipt](../lib/execution/backend-http.mts#L35) 与查询 permit 的 owner/permitId/runId 一致；ingestion 继续校验签名与 receipt 自身绑定，见 [attestations.mts:55](../lib/execution/attestations.mts#L55)。受信任 adapter 可在 `AuthorizationContext.executionRunId` 绑定唯一 Run；[HTTP 与 reconcile](../lib/execution/backend-http.mts#L89) 在读取或写入前拒绝其他 Run，绑定主体不恢复前任 Run 的物理占用。该字段只由服务端传入，Worker machine 的 start/complete/cancel 使用这些受限原生 backend 调用；owner recovery 仍关闭前任物理占用，见 [backend-http.mts:75](../lib/execution/backend-http.mts#L75)。
+
+
+B2 的 execute claim/start/renew/report 在每次写事务核实当前审批、Ticket 修订与 body、registry、操作/预算，以及已存在 permit 的取消/关闭/deadline 状态。lease 为 6 秒，期限受 issuer、Worker、approval 与既有 permit 的较小期限限制；任一旧 generation 的动作及缓存读取均拒绝。claim 的同请求重放返回原 metadata；原租约已失效时，该 metadata 只是历史回执，不能据此 start、续租或执行其他 leased action，也不复活租约；renew 同请求重放保留精确原 expiry。
+
+start/complete/cancel 在外部请求前保留 pending action，安全结果完成后保存不可变响应。真实签名 result 未就绪返回 `INVALID_EVIDENCE`，不能用调用者 state/evidence 宣告完成；cancel_fence 和 stop 分别代表取消栅栏和物理关闭。外部 HTTP 与 SQLite 不是同一事务：后端已接受而 issuer/lease 随后失效时，后续数据库写入被拒绝，保留 immutable permit 与 pending action，由有效 historical reconcile 或 owner recovery 对账。完成缓存仍受当前 credential/lease/generation 校验；再次获取更新的 stop 状态须使用新 action requestId。
 
 ### consumer 拟实施持久状态与恢复
 
@@ -99,13 +104,13 @@ owner 与项目 connector 都在返回前检查完整 envelope。owner [MCP rout
 
 已实施的收据查询绑定与受信任 Run 范围限制由 `tests/execution/backend-http.test.mjs` 使用新临时 SQLite、合成签名密钥和真实 loopback 协议 peer 验证；该 fixture 不代表实际 Docker 执行。
 
-Worker 身份链使用 `npm run test:execution:workers`：新临时 SQLite、本地随机账户 token 和真实 Next loopback 端点覆盖 owner/machine 分派、两工具范围、issuer 失效、稳定重放/重启及同事务 guard 回滚。该检查不领取或启动容器。实现 A 时选择 `test:connectors`、`test:mcp:task-reads` 和相关 `test:execution:domain`；实施其余 B 合同时增加 `test:local`、`test:execution:api`、`test:workspace-loop` 与原生 Worker/consumer 测试。参考 [consumer fixture:7][pr-fixture] 的接入需使用新临时 SQLite、本地测试账户/随机 API token 与 loopback server；协议/consumer 脚本在实际交付时纳入现役 package scripts。代码交付按影响完成 build、tsc、lint；真实 Docker 端到端使用 daemon、锁定镜像和现役签名 fixture，分别验证 result/cancel_fence/stop、后端失败与恢复。具体 harness 及前置条件见 [TESTING.md](TESTING.md)。
+Worker 身份链使用 `npm run test:execution:workers`：新临时 SQLite、本地随机账户 token 和真实 Next loopback 端点覆盖 owner/machine 分派、八工具范围、issuer 失效、稳定重放/重启及同事务 guard 回滚。其中身份检查不启动后端；租约与动作检查使用真实 fresh SQLite、临时本地账户及实际签名 loopback 协议 peer，不启动 Docker 容器。实现 A 时选择 `test:connectors`、`test:mcp:task-reads` 和相关 `test:execution:domain`；已实施 B2 同时运行 `test:local`、`test:execution:api`、`test:workspace-loop` 与原生 Worker 测试；consumer 测试在 B3 交付时追加。参考 [consumer fixture:7][pr-fixture] 的接入需使用新临时 SQLite、本地测试账户/随机 API token 与 loopback server；协议/consumer 脚本在实际交付时纳入现役 package scripts。代码交付按影响完成 build、tsc、lint；真实 Docker 端到端使用 daemon、锁定镜像和现役签名 fixture，分别验证 result/cancel_fence/stop、后端失败与恢复。具体 harness 及前置条件见 [TESTING.md](TESTING.md)。
 
 ## 来源、许可与证据索引
 
 机制来源为 [PR #39：Complete Run-scoped MCP execution leases and durable consumer](https://github.com/huiyuanXP/agent-task-hub/pull/39)，源码引用固定到 `92bd3ee788c1f22a35ccdacf140030d0463f7937`，通过本地 Git 对象 `git show` 核对。现役合同通过本 worktree 的实际文件核对；外部 PR 状态按私有证据的采集时刻解释。
 
-应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices；模块 A 与本地 Worker 身份/guard 使用原创实现，未复制这些应用模块。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
+应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices；模块 A 与本地 Worker 身份/guard/leases/actions 使用原创实现，未复制这些应用模块。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
 
 私有研究及历史证据位于主 workspace 的 `.local/evidence/parallel-tickets-20261009/`：
 

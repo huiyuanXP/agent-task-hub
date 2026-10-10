@@ -1,6 +1,10 @@
 import type { LocalDatabase } from '../database.mts';
 import { AuthError, configuredOrigin } from '../local-auth.mts';
 import type { WorkerPrincipal } from './worker-types.mts';
+import type { BackendEnvironment } from './backend-config.mts';
+import { configuredRegistry } from './backend-config.mts';
+import { claimExecutionRun, renewExecutionRun, reportExecutionRun } from './worker-leases.mts';
+import { startExecutionRun, completeExecutionRun, cancelExecutionRun } from './worker-actions.mts';
 import { authenticateWorkerHeaders } from './worker-auth.mts';
 import { guardedWorkerDatabase } from './worker-guard.mts';
 import { boundedId, exactObject, ExecutionError, invalid } from './errors.mts';
@@ -10,9 +14,17 @@ import { workerHttpError } from './worker-http.mts';
 
 export const MAX_WORKER_RESPONSE_BYTES = 1024 * 1024;
 const headers = { 'Cache-Control': 'private, no-store' };
+const leasedProperties = { runId: { type: 'string', maxLength: 200 }, requestId: { type: 'string', maxLength: 128 }, leaseToken: { type: 'string', maxLength: 200 } };
+const leasedTool = (name: string, description: string, report = false) => ({ name, description, inputSchema: { type: 'object', properties: { ...leasedProperties, ...(report ? { message: { type: 'string', maxLength: 2048 } } : {}) }, required: ['runId', 'requestId', 'leaseToken', ...(report ? ['message'] : [])], additionalProperties: false } });
 const tools = [
   { name: 'get_execution_run', description: 'Read this delegated execution Run and its existing permit summary', inputSchema: { type: 'object', properties: { runId: { type: 'string', maxLength: 200 } }, required: ['runId'], additionalProperties: false } },
   { name: 'list_execution_runs', description: 'Read the single execution Run delegated to this Worker', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'claim_execution_run', description: 'Claim a six-second exclusive execute or historical reconcile generation', inputSchema: { type: 'object', properties: { runId: leasedProperties.runId, requestId: leasedProperties.requestId, leaseId: { type: 'string', maxLength: 36 }, verifier: { type: 'string', maxLength: 64 }, mode: { type: 'string', enum: ['execute', 'reconcile'] } }, required: ['runId', 'requestId', 'leaseId', 'verifier', 'mode'], additionalProperties: false } },
+  leasedTool('start_execution_run', 'Start the fixed operation with the current approved execute lease'),
+  leasedTool('renew_execution_run', 'Renew the current approved execute generation'),
+  leasedTool('report_execution_run', 'Retain a bounded idempotent progress message', true),
+  leasedTool('complete_execution_run', 'Reconcile the existing permit and require a trusted result'),
+  leasedTool('cancel_execution_run', 'Request cancellation and separately reconcile signed physical closure'),
 ];
 function response(value: unknown): Response {
   const json = JSON.stringify(value);
@@ -30,7 +42,7 @@ async function delegatedRun(db: LocalDatabase, principal: WorkerPrincipal) {
     contract: JSON.parse(run.ticketBody), created: run.created, updated: run.updated,
     permit: permit ? { permitId: permit.id, deadlineMs: permit.deadline_ms, cancelRequested: permit.cancel_requested === 1, closedAt: permit.closed_at } : null };
 }
-export async function handleWorkerMCPRequest(db: LocalDatabase, request: Request, origin = configuredOrigin()): Promise<Response> {
+export async function handleWorkerMCPRequest(db: LocalDatabase, request: Request, origin = configuredOrigin(), env: BackendEnvironment = {}): Promise<Response> {
   let id: string | number | null = null;
   try {
     const principal = await authenticateWorkerHeaders(db, request.headers, request.method, origin);
@@ -58,7 +70,16 @@ export async function handleWorkerMCPRequest(db: LocalDatabase, request: Request
       value = { run: await delegatedRun(db, principal) };
     } else if (body.params.name === 'list_execution_runs') {
       exactObject(args, []); value = { runs: [await delegatedRun(db, principal)] };
-    } else throw new ExecutionError('AUTHORIZATION_DENIED', 'Tool is not delegated to this Worker', 403);
+    } else if (body.params.name === 'claim_execution_run' || body.params.name === 'renew_execution_run' || body.params.name === 'report_execution_run') {
+      const context = { owner: principal.owner, actor: principal.actor, executionRunId: principal.runId,
+        ...(body.params.name === 'claim_execution_run' && args && typeof args === 'object' && 'mode' in args && args.mode === 'reconcile' ? {} : { registry: configuredRegistry(env) }) };
+      if (body.params.name === 'claim_execution_run') value = await claimExecutionRun(db, principal, args, context);
+      else if (body.params.name === 'renew_execution_run') value = await renewExecutionRun(db, principal, args, context);
+      else value = await reportExecutionRun(db, principal, args, context);
+    } else if (body.params.name === 'start_execution_run') value = await startExecutionRun(db, principal, args, env);
+    else if (body.params.name === 'complete_execution_run') value = await completeExecutionRun(db, principal, args, env);
+    else if (body.params.name === 'cancel_execution_run') value = await cancelExecutionRun(db, principal, args, env);
+    else throw new ExecutionError('AUTHORIZATION_DENIED', 'Tool is not delegated to this Worker', 403);
     return response({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false } });
   } catch (error) {
     if (error instanceof AuthError) return workerHttpError(error);
