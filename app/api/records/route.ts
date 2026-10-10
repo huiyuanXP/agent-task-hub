@@ -1,13 +1,16 @@
+import { configuredOrigin } from '../../../lib/local-auth.mts';
 import type { RecordRow, RecordBody, RecordDraft } from "../../../lib/types";
 import { ideaWithPlanning } from "../../../lib/planning-state";
 import { deliverJob, EVENT } from "../../../lib/events";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getCurrentUser } from "../../../lib/current-user";
 import { database } from "../../../lib/store";
+import { listProjects } from "../../../lib/projects/catalog.mts";
+import { ticketStatusWriteGuard } from "../../../lib/tickets/record-write.mts";
 const kinds = ["idea", "plan", "ticket", "run"];
 const states = ["todo", "running", "waiting", "done", "error"];
 export async function GET() {
   try {
-    const user = await getChatGPTUser();
+    const user = await getCurrentUser();
     if (!user)
       return Response.json({ error: "请重新登录后重试" }, { status: 401 });
     const { results } = await database()
@@ -16,6 +19,7 @@ export async function GET() {
       .all<RecordRow>();
     return Response.json(
       {
+        projects: await listProjects(database(), user.userId),
         records: await Promise.all(
           results.map((r) =>
             r.kind === "idea"
@@ -37,18 +41,18 @@ export async function GET() {
   } catch (e) {
     console.error(e);
     return Response.json(
-      { error: "暂时无法读取云端数据，请重试" },
+      { error: "暂时无法读取本地数据，请重试" },
       { status: 503 },
     );
   }
 }
 export async function POST(req: Request) {
   try {
-    const user = await getChatGPTUser();
+    const user = await getCurrentUser();
     if (!user)
       return Response.json({ error: "请重新登录后重试" }, { status: 401 });
     const origin = req.headers.get("origin");
-    if (origin !== new URL(req.url).origin)
+    if (origin !== configuredOrigin())
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     const payload = (await req.json()) as RecordDraft;
     const { id, kind, revision, ...body } = payload;
@@ -113,11 +117,13 @@ export async function POST(req: Request) {
           { error: "另一处已修改此记录。请刷新并重新打开，避免覆盖新内容" },
           { status: 409 },
         );
+      const statusChanged = kind === "ticket" && (JSON.parse(old.body) as RecordBody).status !== body.status;
+      const statusGuard = statusChanged ? " AND " + ticketStatusWriteGuard : "";
       const auditId = crypto.randomUUID();
       const statements = [
         db
           .prepare(
-            "INSERT INTO records (id,owner,kind,body,revision,created,updated) SELECT ?,?,'history',?,1,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND revision=?)",
+            `INSERT INTO records (id,owner,kind,body,revision,created,updated) SELECT ?,?,'history',?,1,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND owner=? AND revision=?${statusGuard})`,
           )
           .bind(
             auditId,
@@ -137,7 +143,7 @@ export async function POST(req: Request) {
           ),
         db
           .prepare(
-            "UPDATE records SET body=?,revision=revision+1,updated=? WHERE id=? AND owner=? AND revision=?",
+            `UPDATE records SET body=?,revision=revision+1,updated=? WHERE id=? AND owner=? AND revision=?${statusGuard}`,
           )
           .bind(JSON.stringify(body), now, id, user.userId, revision),
       ];
@@ -180,7 +186,7 @@ export async function POST(req: Request) {
       const results = await db.batch(statements);
       if (!results[1].meta.changes)
         return Response.json(
-          { error: "另一处已修改此记录。请刷新并重新打开，避免覆盖新内容" },
+          { error: "修订或活动执行已改变。输入已保留，请刷新关联数据后重新确认" },
           { status: 409 },
         );
       if (kind === "idea") {
@@ -198,7 +204,7 @@ export async function POST(req: Request) {
         .prepare(
           "SELECT body,revision FROM records WHERE id=? AND owner=? AND kind=?",
         )
-        .bind(body.ticketId, user.userId, "ticket")
+        .bind(body.ticketId ?? null, user.userId, "ticket")
         .first<Pick<RecordRow, "body" | "revision">>();
       if (!ticket)
         return Response.json({ error: "关联 Ticket 不存在" }, { status: 400 });

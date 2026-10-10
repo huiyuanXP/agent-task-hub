@@ -49,32 +49,28 @@ try:
         assert '点子工坊' in html
         request(base,'/favicon.svg')
         for path in ['/api/records','/api/planning']: request(base,path,status=401)
-        request(base,'/mcp',status=405)
-        request(base,'/mcp','POST',{'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'list_planning_jobs'}},status=401)
-        info=rpc('',method='initialize',base=base)
+        request(base,'/mcp',status=401)
+        request(base,'/mcp','POST',{'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'list_planning_jobs'}},headers={'Origin':base},status=401)
+        _,discovery_login=request(base,'/api/auth/login','POST',{'username':'alice','password':'synthetic-password'},{'Origin':base})
+        discovery_auth={'Cookie':discovery_login['Set-Cookie'].split(';')[0],'Origin':base}
+        info=rpc('',method='initialize',base=base,headers=discovery_auth)
         assert info['capabilities']['tools']=={} and info['capabilities']['events']=={}
-        tools=rpc('',method='tools/list',base=base)['tools']
+        tools=rpc('',method='tools/list',base=base,headers=discovery_auth)['tools']
         assert {'create_idea','get_idea','list_planning_jobs','claim_planning_job','save_plan_and_tickets'} <= {tool['name'] for tool in tools}
         ok(('dev' if base==DEV else 'built preview')+' HTML/assets, anonymous API/MCP denial, MCP discovery')
     spoof={'oai-authenticated-user-id':'validation_spoof','oai-authenticated-user-email':'spoof@example.test'}
     request(DEV,'/api/records',headers=spoof,status=401)
-    request(DEV,'/signin-with-chatgpt',headers={'Host':'example.test'},status=403)
-    request(DEV,'/signin-with-chatgpt',headers={'Origin':'https://example.test'},status=403)
-    request(DEV,'/signin-with-chatgpt',headers={'Sec-Fetch-Site':'cross-site'},status=403)
-    request(DEV,'/signin-with-chatgpt',headers={'Purpose':'prefetch'},status=204)
-    request(DEV,'/signin-with-chatgpt','POST',status=405)
-    request(DEV,'/callback',status=501)
-    _,h=request(DEV,'/signin-with-chatgpt?return_to=https://example.test',status=302)
-    assert h['Location']=='/'
-    _,h=request(DEV,'/signin-with-chatgpt?return_to=/',status=302)
+    request(DEV,'/signin')
+    request(DEV,'/api/auth/login','POST',{'username':'alice','password':'wrong'}, {'Origin':DEV},401)
+    _,h=request(DEV,'/api/auth/login','POST',{'username':'alice','password':'synthetic-password'},{'Origin':DEV})
     cookie=h['Set-Cookie'].split(';')[0]
-    assert 'HttpOnly' in h['Set-Cookie'] and 'SameSite=Lax' in h['Set-Cookie']
+    assert 'HttpOnly' in h['Set-Cookie'] and 'SameSite=Strict' in h['Set-Cookie']
     AUTH={'Cookie':cookie,'Origin':DEV}
-    ok('mock auth rejects spoofed identity, external hosts/origins, prefetch, invalid methods and unsafe redirects')
+    ok('real local password login denies invalid passwords and issues private same-origin session')
     empty,_=request(DEV,'/api/records',headers=AUTH); assert empty['records']==[],empty
     planning,_=request(DEV,'/api/planning',headers=AUTH); assert planning=={'jobs':[],'subscriptions':0},planning
     request(PREVIEW,'/api/records',headers={'Cookie':cookie},status=401)
-    ok('authenticated fresh DB empty; built preview has no mock session')
+    ok('authenticated fresh DB empty; independent production database rejects other instance session')
     save({'kind':'idea','title':'No origin'},403,{'Cookie':cookie})
     save({'kind':'idea','title':'Bad origin'},403,{'Cookie':cookie,'Origin':'https://example.test'})
     save({'kind':'idea','title':''},400)
@@ -84,11 +80,11 @@ try:
     save({'kind':'ticket','title':'Missing plan','status':'todo','planId':'missing'},400)
     save({'kind':'run','title':'Missing ticket','ticketId':'missing'},400)
     ok('records reject invalid input, cross-origin writes and broken references')
-    idea={'kind':'idea','title':'VM1 synthetic idea','text':'Local verification only','project':'VM1 validation'}
+    idea={'kind':'idea','title':'Native synthetic idea','text':'Local verification only','project':'Native validation'}
     created=save(idea); idea_id=created['id']; assert created['revision']==1
     planjob,_=request(DEV,'/api/planning','POST',{'ideaId':idea_id},AUTH)
     assert planjob['job']['delivery']=='no_subscription'
-    changed=save({**idea,'id':idea_id,'revision':1,'title':'VM1 synthetic idea revision 2'},200)
+    changed=save({**idea,'id':idea_id,'revision':1,'title':'Native synthetic idea revision 2'},200)
     assert changed['revision']==2
     automatic=rpc('list_planning_jobs',headers=AUTH)['jobs']
     current=[job for job in automatic if job['idea_id']==idea_id and job['idea_revision']==2]
@@ -105,7 +101,7 @@ try:
     assert old['status']=='superseded'
     rpc('claim_planning_job',{'job_id':old['id']},AUTH,error=-32602)
     ok('idea/job creation, revision conflict, history snapshot and superseded job protection')
-    args={'request_id':'vm1-initial-validation','title':'VM1 synthetic MCP idea','text':'Planning only','project':'VM1 validation'}
+    args={'request_id':'vm1-initial-validation','title':'Native synthetic MCP idea','text':'Planning only','project':'Native validation'}
     mcp_idea=rpc('create_idea',args,AUTH); retry=rpc('create_idea',args,AUTH)
     assert mcp_idea['idea_id']==retry['idea_id'] and mcp_idea['job_id']==retry['job_id']
     assert mcp_idea['delivery']=='no_subscription'
@@ -114,8 +110,8 @@ try:
     assert 'Planning only' in claim['constraint']
     rpc('claim_planning_job',{'job_id':mcp_idea['job_id']},AUTH,error=-32602)
     proposed={'job_id':mcp_idea['job_id'],'claim_token':claim['claim_token'],
-      'plan':{'title':'VM1 validation plan','goal':'Validate local flow','scope':'Local synthetic records','acceptance':'Checks pass'},
-      'tickets':[{'key':'verify','title':'VM1 validation ticket','goal':'Validate snapshot','scope':'Loopback only','acceptance':'Snapshot is immutable'}]}
+      'plan':{'title':'Native validation plan','goal':'Validate local flow','scope':'Local synthetic records','acceptance':'Checks pass'},
+      'tickets':[{'key':'verify','title':'Native validation ticket','goal':'Validate snapshot','scope':'Loopback only','acceptance':'Snapshot is immutable'}]}
     rpc('save_plan_and_tickets',{**proposed,'claim_token':'invalid'},AUTH,error=-32602)
     output=rpc('save_plan_and_tickets',proposed,AUTH); repeated=rpc('save_plan_and_tickets',proposed,AUTH)
     assert output==repeated and len(output['ticket_ids'])==1
@@ -126,37 +122,39 @@ try:
     records,_=request(DEV,'/api/records',headers=AUTH)
     ticket=next(r for r in records['records'] if r['id']==ticket_id)
     assert ticket['status']=='todo' and ticket['allowedActions']=='仅规划；执行授权待单独确认'
-    run=save({'kind':'run','title':'VM1 synthetic snapshot','ticketId':ticket_id,'evidence':'Synthetic API checks'})
-    save({'kind':'ticket','title':'VM1 edited ticket','id':ticket_id,'revision':1,'status':'done','evidence':'Synthetic test passed'},200)
+    run=save({'kind':'run','title':'Native synthetic snapshot','ticketId':ticket_id,'evidence':'Synthetic API checks'})
+    save({'kind':'ticket','title':'Native edited ticket','id':ticket_id,'revision':1,'status':'done','evidence':'Synthetic test passed'},200)
     save({'kind':'run','title':'Cannot edit run','id':run['id'],'revision':1},400)
     records,_=request(DEV,'/api/records',headers=AUTH)
     snapshot=next(r for r in records['records'] if r['id']==run['id'])
-    assert snapshot['ticketRevision']==1 and snapshot['contract']['title']=='VM1 validation ticket'
+    assert snapshot['ticketRevision']==1 and snapshot['contract']['title']=='Native validation ticket'
     ok('ticket evidence requirement, revision update and immutable Run contract snapshot')
     stale=rpc('claim_planning_job',{'job_id':f'planning:{idea_id}:2'},AUTH)
     save({**idea,'id':idea_id,'revision':2},200)
     rpc('save_plan_and_tickets',{**proposed,'job_id':stale['job_id'],'claim_token':stale['claim_token']},AUTH,error=-32602)
     ok('MCP save rejects idea revisions changed after claiming')
     rpc('',{'name':'idea.planning_requested','delivery':{'mode':'webhook','url':'http://127.0.0.1:9999/no-network','secret':'synthetic-invalid'}},AUTH,error=-32602,method='events/subscribe')
-    ok('callback allowlist rejects local/untrusted URL before delivery; no external webhook used')
-    owner={'oai-authenticated-user-id':'local_seedy','oai-authenticated-user-email':'local@example.test','Origin':PREVIEW}
-    other={'oai-authenticated-user-id':'vm1_other_synthetic_owner','oai-authenticated-user-email':'other@example.test','Origin':PREVIEW}
-    preview_records,_=request(PREVIEW,'/api/records',headers=owner)
-    assert any(r['id']==run['id'] for r in preview_records['records'])
+    ok('invalid callback secret rejected before local delivery')
+    _,preview_login=request(PREVIEW,'/api/auth/login','POST',{'username':'alice','password':'synthetic-password'},{'Origin':PREVIEW})
+    owner={'Cookie':preview_login['Set-Cookie'].split(';')[0],'Origin':PREVIEW}
+    _,other_login=request(PREVIEW,'/api/auth/login','POST',{'username':'bob','password':'synthetic-password'},{'Origin':PREVIEW})
+    other={'Cookie':other_login['Set-Cookie'].split(';')[0],'Origin':PREVIEW}
+    assert request(PREVIEW,'/api/records',headers=owner)[0]['records']==[]
+    isolated,_=request(PREVIEW,'/api/records','POST',{'kind':'idea','title':'Separate database'},owner,201)
     assert request(PREVIEW,'/api/records',headers=other)[0]['records']==[]
-    rpc('get_idea',{'idea_id':mcp_idea['idea_id']},other,error=-32602,base=PREVIEW)
+    rpc('get_idea',{'idea_id':isolated['id']},other,error=-32602,base=PREVIEW)
     assert rpc('list_planning_jobs',headers=other,base=PREVIEW)['jobs']==[]
-    request(PREVIEW,'/api/records','POST',{'kind':'idea','title':'Cross owner update','id':idea_id,'revision':3},other,404)
-    request(PREVIEW,'/api/planning','POST',{'ideaId':idea_id},other,404)
-    spoof_with_cookie={**AUTH,**other,'Origin':DEV}
+    request(PREVIEW,'/api/records','POST',{'kind':'idea','title':'Cross owner update','id':isolated['id'],'revision':1},other,404)
+    request(PREVIEW,'/api/planning','POST',{'ideaId':isolated['id']},other,404)
+    spoof_with_cookie={**AUTH,**spoof}
     assert any(r['id']==idea_id for r in request(DEV,'/api/records',headers=spoof_with_cookie)[0]['records'])
-    ok('built Worker shares local state and enforces owner scoping when trusted identity is supplied; dev strips spoofed headers')
-    (OUT / 'fixtures.json').write_text(json.dumps({'ideaId':mcp_idea['idea_id'],'ideaTitle':args['title'],'project':args['project'],'planId':output['plan_id'],'planTitle':proposed['plan']['title'],'ticketId':ticket_id,'ticketTitle':'VM1 edited ticket','runId':run['id'],'runTitle':'VM1 synthetic snapshot'},indent=2)+'\n')
-    _,out=request(DEV,'/signout-with-chatgpt','POST',headers=AUTH,status=303)
-    assert 'Max-Age=0' in out['Set-Cookie']
-    request(DEV,'/api/records',headers={'Cookie':'__sites_local_auth='},status=401)
-    ok('mock sign-out expires cookie and anonymous access is denied')
-    (OUT / 'api-evidence.json').write_text(json.dumps({'status':'passed','checks':checks,'synthetic_records_only':True,'external_callbacks':False,'limitations':['Built preview explicitly selects synthetic trusted-sites compatibility; independent Access identity has separate acceptance suites.','No successful external webhook or execution adapter exercised.']},indent=2)+'\n')
+    ok('independent native databases and real account owner scoping; identity headers cannot replace session')
+    (OUT / 'fixtures.json').write_text(json.dumps({'ideaId':mcp_idea['idea_id'],'ideaTitle':args['title'],'project':args['project'],'planId':output['plan_id'],'planTitle':proposed['plan']['title'],'ticketId':ticket_id,'ticketTitle':'Native edited ticket','runId':run['id'],'runTitle':'Native synthetic snapshot'},indent=2)+'\n')
+    _,out=request(DEV,'/api/auth/logout','POST',headers=AUTH,status=200)
+    assert '1970' in out['Set-Cookie']
+    request(DEV,'/api/records',headers={'Cookie':'hub_session='},status=401)
+    ok('real logout expires cookie and anonymous access is denied')
+    (OUT / 'api-evidence.json').write_text(json.dumps({'status':'passed','checks':checks,'synthetic_records_only':True,'external_callbacks':False,'limitations':['Synthetic planning and manual snapshots only; no Ticket dispatch.']},indent=2)+'\n')
 except Exception:
     (OUT / 'api-evidence.json').write_text(json.dumps({'status':'failed','checks_completed':checks},indent=2)+'\n')
     raise

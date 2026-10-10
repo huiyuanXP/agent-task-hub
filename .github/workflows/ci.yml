@@ -28,8 +28,8 @@ jobs:
           python-version: '3.x'
       - run: npm run install:ci
       - run: npm run lint
-      - run: npx --no-install tsc --noEmit
       - run: npm run build
+      - run: npx --no-install tsc --noEmit
       - run: npm ci --prefix tests/browser
       - run: npx --prefix tests/browser playwright install --with-deps chromium
       - name: Prepare the explicit local Docker backend
@@ -41,7 +41,11 @@ jobs:
           env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH \
             docker --host=unix:///var/run/docker.sock pull \
             node@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+      - run: npm run test:connectors
+      - run: npm run test:workspace-loop
       - run: npm run test:unit
+      - run: npm run test:local
+      - run: npm run test:execution:domain
       - name: Keep shared test artifacts owned by the ordinary CI user
         run: |
           mkdir -p test-results
@@ -51,23 +55,30 @@ jobs:
         run: |
           runner_node="$(command -v node)"
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
-            --experimental-strip-types --test --test-concurrency=1 tests/execution/*.test.mjs
-      - name: Verify real Worker, Access identity, supervisor, Docker and execution UI
+            scripts/test-execution.mjs
+      - name: Verify native local accounts, supervisor, real Docker and execution UI
         run: |
           runner_node="$(command -v node)"
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin \
             PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" "$runner_node" \
-            --experimental-strip-types tests/execution/backend-worker.mjs
+            --experimental-strip-types tests/execution/backend-native.mjs
       - run: npm run test:browser-policy
       - run: npm run test:auth
-      - name: Verify identity in the already-built Worker
-        run: node --experimental-strip-types tests/auth/worker-api.mjs
+      - name: Verify local authentication in the already-built native server
+        run: node --experimental-strip-types tests/auth/native-api.mjs
       - name: Verify readonly Ticket, Plan, manual and execution Run MCP queries
         run: npm run test:mcp:task-reads
+      - name: Verify revision-guarded MCP status writes and browser readback
+        run: npm run test:ticket-status:native
+        env:
+          TICKET_STATUS_EVIDENCE_DIR: test-results/ticket-status
       - run: npm run test:planning:revisions
       - run: npm run test:execution:configuration
       - run: npm run test:planning:recovery
       - run: npm run test:planning:lifecycle
+      - run: npm run test:planning:review
+      - run: npm run test:execution:api
+      - run: npm run test:authorization:browser
       - run: npm run test:planning:browser
       - run: npm run test:auth:browser
       - run: npm run test:integration

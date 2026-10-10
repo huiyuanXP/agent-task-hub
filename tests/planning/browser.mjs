@@ -1,10 +1,12 @@
-// Real Chromium -> loopback ingress -> authenticated built Worker and fresh D1.
+// Real Chromium -> loopback ingress -> authenticated native server and fresh SQLite.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { planningFixture } from './fixture.mjs';
 import { chromium } from '../browser/node_modules/playwright/index.mjs';
 import { launchRestrictedBrowser } from '../browser/network.mjs';
 const f = await planningFixture();
+const {issueToken}=await import('../../lib/local-auth.mts');
+const browserSession=await issueToken(f.db,f.alice.userId,{kind:'browser'});
 let base, restricted;
 const errors = [];
 const facade = createServer(async (req,res) => {
@@ -12,7 +14,8 @@ const facade = createServer(async (req,res) => {
     const chunks=[]; for await (const chunk of req) chunks.push(chunk);
     const headers=new Headers(req.headers); headers.delete('host'); headers.delete('authorization'); headers.delete('cookie');
     if(headers.get('origin')===base) headers.set('origin',f.origin);
-    const response=await f.dispatch(req.url,{method:req.method,headers,...(chunks.length?{body:Buffer.concat(chunks)}:{})});
+    headers.set('cookie','hub_session='+browserSession.token);
+    const response=await fetch(f.origin+req.url,{method:req.method,headers,...(chunks.length?{body:Buffer.concat(chunks)}:{})});
     const body=Buffer.from(await response.arrayBuffer()); const outgoing=Object.fromEntries(response.headers);
     delete outgoing['content-encoding']; delete outgoing['content-length'];
     res.writeHead(response.status,outgoing); res.end(body);
@@ -39,7 +42,7 @@ try {
   const failures=[];
   const check=async(name,fn)=>{try{await fn(); console.log('PASS: '+name);}catch(e){failures.push({name,error:String(e)}); console.error('FAIL: '+name+' '+String(e));}};
   await check('active lease displays deadline and countdown then expires with usable retry',async()=>{
-    const c=card(active.idea.title); await c.getByText(/租约到期/).waitFor();
+    const c=card(active.idea.title); await c.getByText('规划详情',{exact:true}).click(); await c.getByText(/租约到期/).waitFor();
     assert.equal(await c.getByRole('button',{name:'Agent 正在处理'}).isDisabled(),true);
     await f.db.prepare('UPDATE jobs SET lease=? WHERE id=?').bind(Date.now()+10000,active.id).run();
     const refreshed=page.waitForResponse(r=>r.url()===base+'/api/planning'&&r.request().method()==='GET');
@@ -53,24 +56,24 @@ try {
     const c=card(expired.idea.title); await c.getByText(/规划租约已过期/).waitFor();
     const done=page.waitForResponse(r=>r.url()===base+'/api/planning'&&r.request().method()==='POST');
     await c.getByRole('button',{name:'重试规划'}).click(); assert.equal((await done).status(),200);
-    await c.getByText(/待连接插件/).waitFor();
+    await c.getByText(/等待项目 Agent/).waitFor();
     await c.getByText(/^重试冷却：/).waitFor();
     assert.equal(await c.getByRole('button',{name:'等待重试冷却'}).isDisabled(),true);
     const row=await f.db.prepare('SELECT generation,retry_after FROM jobs WHERE id=?').bind(expired.id).first(); assert.equal(row.generation,1); assert.ok(row.retry_after>Date.now());
   });
   await check('permanent reason and exhausted recovery visible with eligible action',async()=>{
-    const c=card(permanent.idea.title); await c.getByText(/recovery_exhausted/).waitFor(); await c.getByText(/permanent_http/).waitFor();
+    const c=card(permanent.idea.title); await c.getByText(/recovery_exhausted/).waitFor(); await c.getByText(/^原因：.*permanent_http/).waitFor();
     assert.equal(await c.getByRole('button',{name:'重试规划'}).isEnabled(),true);
   });
   await check('backoff displays authoritative next retry and sanitized target reason',async()=>{
-    const c=card(backoff.idea.title); await c.getByText(/下次投递/).waitFor(); await c.getByText(/temporary_http/).waitFor();
+    const c=card(backoff.idea.title); await c.getByText('规划详情',{exact:true}).click(); await c.getByText(/下次投递/).waitFor(); await c.getByText(/^原因：.*temporary_http/).waitFor();
     assert.equal(await c.getByRole('button',{name:'等待自动重试'}).isDisabled(),true);
   });
   await check('missing metadata preserves manual recovery action',async()=>{
     const c=card(fallback.idea.title); assert.equal(await c.getByRole('button',{name:'请求 Agent'}).isEnabled(),true);
   });
   await restricted.flushNetworkEvidence(); assert.deepEqual(errors,[]); assert.deepEqual(restricted.errors,[]);
-  assert.ok(restricted.requestedExternal.every(url=>url==='https://fonts.googleapis.com'));
+  assert.deepEqual(restricted.requestedExternal,[]);
   console.log('PLANNING_BROWSER_EVIDENCE '+JSON.stringify({failures,pageErrors:errors,networkPolicyErrors:restricted.errors,blocked:restricted.blocked}));
   assert.deepEqual(failures,[],'Chromium recovery contract failures');
 } finally { await restricted?.close(); facade.closeAllConnections(); if(facade.listening) await new Promise(resolve=>facade.close(resolve)); await f.close(); }

@@ -7,6 +7,7 @@ import type { ExecutionDatabase } from '../execution/types.mts';
 import { decodeCursor, makePage, type CursorContext } from './cursor.mts';
 import { safeBody } from './dto.mts';
 import { requireRecord } from './queries.mts';
+import type { TaskReadOptions } from './bounds.mts';
 import type { ListInput } from './validation.mts';
 export type TrustedRegistry = () => readonly OperationDefinition[];
 interface ReadRunRow {
@@ -100,12 +101,14 @@ async function runDTO(db: ExecutionDatabase, owner: string, row: ReadRunRow, reg
     attestations: receipts.results.map(({ receipt }) => evidenceDTO(receipt, owner, row, contractHash)).filter(value => value !== null),
     authorization: await authorizationDTO(db, owner, row, registry) };
 }
-export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry) {
+export async function listTicketRuns(db: ExecutionDatabase, owner: string, input: ListInput, registry: TrustedRegistry, options: TaskReadOptions = {}) {
+  const { project, byteBudget } = options;
   const ticketId = input.filters.ticket_id;
-  await requireRecord(db, owner, 'ticket', ticketId);
-  const context: CursorContext = { owner, resource: 'ticket_runs', filters: input.filters };
+  await requireRecord(db, owner, 'ticket', ticketId, project);
+  const context: CursorContext = { owner, resource: 'ticket_runs', filters: {...input.filters, ...(project === undefined ? {} : {project})} };
   const cursor = await decodeCursor(input.cursor, context);
   const clauses: string[] = [], params: (string | number)[] = [owner, ticketId, owner, ticketId];
+  if (project !== undefined) { clauses.push("COALESCE(NULLIF(json_extract(body,'$.project'),''),CASE WHEN source='manual' THEN NULLIF(json_extract(body,'$.contract.project'),'') END,'通用')=?"); params.push(project); }
   for (const key of ['source', 'state']) if (key in input.filters) { clauses.push(`${key}=?`); params.push(input.filters[key]); }
   if (cursor) {
     clauses.push('(created<? OR (created=? AND (id<? OR (id=? AND source<?))))');
@@ -121,5 +124,5 @@ export async function listTicketRuns(db: ExecutionDatabase, owner: string, input
     FROM execution_runs WHERE owner=? AND ticket_id=?
   ) ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY created DESC,id DESC,source DESC LIMIT ?`)
     .bind(...params, input.limit + 1).all<ReadRunRow>();
-  return makePage(result.results, input.limit, context, row => runDTO(db, owner, row, registry));
+  return makePage(result.results, input.limit, context, row => runDTO(db, owner, row, registry), byteBudget);
 }

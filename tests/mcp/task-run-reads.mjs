@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { snapshotTables } from '../local/snapshot.mjs';
 import { planningFixture } from '../planning/fixture.mjs';
 import { prepareExecution, decideAuthorization, revokeAuthorization } from '../../lib/execution/authorization.mts';
 import { getOperationCatalog, REGISTERED_OPERATIONS } from '../../lib/execution/catalog.mts';
@@ -21,7 +22,7 @@ async function setup(options) {
   const owners = {};
   for (const actor of ['alice','bob']) { const seed=value(await rpc('create_idea',{request_id:'run-read-seed',title:'Seed',text:'Synthetic'},actor)); owners[actor]=(await rows('SELECT owner FROM records WHERE id=?',seed.idea_id))[0].owner; }
   const insert = (id,kind,body,owner=owners.alice,created='same persisted date') => f.db.prepare('INSERT INTO records(id,owner,kind,body,revision,created,updated) VALUES(?,?,?,?,1,?,?)').bind(id,owner,kind,JSON.stringify(body),created,'updated date').run();
-  const snapshot = async () => { const state={}; for(const {name} of await rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")) state[name]=await rows(`SELECT * FROM "${name}" ORDER BY rowid`); return state; };
+  const snapshot=async()=>snapshotTables(f.file);
   const context = (actor='alice',extra={}) => ({owner:owners[actor],actor:owners[actor],grantAuthority:'owner',...extra});
   const prepared = async (id,extra={}) => {
     const ctx=context('alice',extra), now=ctx.now??Date.now();
@@ -44,7 +45,7 @@ try {
   for(let i=0;i<22;i++) await f.insert(`manual-${String(i).padStart(2,'0')}`,'run',{ticketId:'ticket',status:'done'});
   await f.insert('{"x":1}','ticket',{}); await f.insert('typed-good','run',{ticketId:'{"x":1}'}); await f.insert('typed-bad','run',{ticketId:{x:1}});
   await f.insert('7','ticket',{}); await f.insert('numeric-bad','run',{ticketId:7});
-  // RED: the actual built Worker currently has no fifth tool or Run page.
+  // RED: the actual native server currently has no fifth tool or Run page.
   const before=await f.snapshot();
   const first=value(await f.rpc('list_ticket_runs',{ticket_id:'ticket',limit:1}));
   assert.deepEqual(first.items.map(r=>[r.id,r.source,r.state]),[['same-id','manual','snapshot']]); assert.ok(first.next_cursor);

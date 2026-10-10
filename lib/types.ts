@@ -81,6 +81,9 @@ export interface JobRow {
   lease: number | null;
   result: string | null;
   created: string;
+  planner_error?: string | null;
+  planner_retry_at?: number | null;
+  connector_id?: string | null;
 }
 export interface PlanningMetadata {
   status: string;
@@ -94,6 +97,8 @@ export interface PlanningMetadata {
   wake_deadline: number | null;
   retry_after: number | null;
   delivery: string;
+  planner_error?: string | null;
+  planner_retry_at?: number | null;
   targets: {
     id: string;
     subscription_id: string;
@@ -174,7 +179,7 @@ export interface JsonSchema {
 
 // Safe session DTO; display data never grants execution authority.
 export interface SessionState {
-  user: { userId: string; displayName: string; email: string; fullName: string | null };
-  mode: "access" | "trusted-sites" | "development";
+  user: { userId: string; displayName: string; username: string };
+  mode: "local";
   expiresAt: number | null;
 }

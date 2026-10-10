@@ -1,0 +1,11 @@
+import { readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {requireDocker} from '../tests/execution/prerequisites.mjs';
+const domain = ['artifacts','attestations','authorization-http','authorization-tooling','authorization','backend-http','dispatch','http','inputs','journal','provision','registry','runs','transport'];
+const domainOnly=process.argv.length===3&&process.argv[2]==='--domain';
+const workspacesOnly=process.argv.length===3&&process.argv[2]==='--workspaces';
+if(process.argv.length>2&&!domainOnly&&!workspacesOnly)throw Error('Usage: test-execution.mjs [--domain|--workspaces]');
+if(!domainOnly)await requireDocker();
+const files=domainOnly?domain.map(name=>`tests/execution/${name}.test.mjs`):workspacesOnly?['workspaces','docker','artifacts','inputs','watchdog'].map(name=>`tests/execution/${name}.test.mjs`):readdirSync('tests/execution').filter(name=>name.endsWith('.test.mjs')).sort().map(name=>'tests/execution/'+name);
+const result=spawnSync(process.execPath,['--experimental-strip-types','--test','--test-concurrency=1',...files],{stdio:'inherit'});
+if(result.error)throw result.error;process.exit(result.status??1);

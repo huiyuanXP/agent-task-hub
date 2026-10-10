@@ -1,5 +1,5 @@
 import type { BackendAttestation } from './attestations.mts';
-/** Structural D1 interface: no Worker runtime imports in the domain. */
+/** Structural SQL interface shared by domain services. */
 export interface ExecutionStatement {
   bind(...values: (string | number | null)[]): ExecutionStatement;
   first<T>(): Promise<T | null>;
@@ -8,7 +8,7 @@ export interface ExecutionStatement {
 }
 export interface ExecutionDatabase {
   prepare(sql: string): ExecutionStatement;
-  /** D1 executes the complete batch in one transaction, rolling back on error. */
+  /** SQLite executes the complete batch in one transaction, rolling back on error. */
   batch(statements: ExecutionStatement[]): Promise<{ meta: { changes: number } }[]>;
 }
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';

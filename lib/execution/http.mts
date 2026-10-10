@@ -3,12 +3,12 @@ import { createRun, getRun, listRuns, transitionRun } from './runs.mts';
 import { exactObject, ExecutionError, invalid } from './errors.mts';
 
 const headers = { 'Cache-Control': 'no-store' };
-export async function readBody(request: Request): Promise<unknown> {
+export async function readBody(request: Request, maxBytes = 16384): Promise<unknown> {
   if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new ExecutionError('UNSUPPORTED_MEDIA', 'JSON required', 415);
   const length = request.headers.get('content-length');
   if (length !== null) {
     if (!/^\d+$/.test(length)) invalid('Invalid Content-Length');
-    if (Number(length) > 16384) throw new ExecutionError('BODY_TOO_LARGE', 'Maximum request body is 16384 bytes', 413);
+    if (Number(length) > maxBytes) throw new ExecutionError('BODY_TOO_LARGE', `Maximum request body is ${maxBytes} bytes`, 413);
   }
   if (!request.body) invalid('JSON body required');
   const reader = request.body.getReader();
@@ -17,7 +17,7 @@ export async function readBody(request: Request): Promise<unknown> {
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       total += value.byteLength;
-      if (total > 16384) { await reader.cancel(); throw new ExecutionError('BODY_TOO_LARGE', 'Maximum request body is 16384 bytes', 413); }
+      if (total > maxBytes) { await reader.cancel(); throw new ExecutionError('BODY_TOO_LARGE', `Maximum request body is ${maxBytes} bytes`, 413); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

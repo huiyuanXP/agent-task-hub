@@ -1,36 +1,17 @@
-# Planning revisions
+# 规划与修订
 
-Every successful save of an Idea creates a new revision and automatically queues planning for that revision. This retains the existing save semantics, including a deliberate save of unchanged content. The optional project is validated as text of at most 120 characters before any write. Title, original content, project, priority and other saved context belong to the new revision. A duplicate submission using the previous revision returns 409 and does not create another history record or job.
+每次成功保存点子都会生成该修订的 queued 规划任务。点子修订、历史和任务入队在同一个 SQLite batch 中提交；使用旧 revision 保存返回409，不能覆盖新内容。
 
-The records API saves history, compare-and-swap revision update and deterministic `planning:<idea-id>:<revision>` job in one D1 batch. The job insert also checks this transaction's unique history ID and resulting Idea revision. Callback delivery starts only after that transaction succeeds; no subscription or failed delivery leaves the durable job available for recovery. A failed job insert rolls the entire revision/history change back.
+常驻 Agent 只领取所绑定项目的当前修订任务。规划 claim 默认10分钟，返回专属 token；计划和最多30个 Tickets 使用稳定逻辑 key 原子回写，重复保存不生成重复任务。旧修订或过期 claim 无法保存结果。
 
-Planner claims and plan saves remain revision-specific. An old claim cannot save after an Idea changes. Current Idea counts/result actions use only its current revision; prior Plans remain visible with a source/current revision label. Their Tickets, approvals and evidence are retained. Replanning does not execute, cancel or authorize a Ticket.
+规划使用真实本机模型产生目标、范围、验收和依赖。Agent 认证缺失、调用失败或结果不合规必须显示实际错误；固定模板或测试模型不能冒充真实规划。规划只生成计划，绝不批准开发执行。
 
-`npm run test:planning:revisions` exercises the actual built Worker with real synthetic Access JWTs, fresh isolated D1 and controlled JWKS. Build first. It checks event revision/project, stale duplicate submission, six concurrent edits, history/transaction rollback, stale planner and cross-owner rejection. Default `npm test` includes it. The isolated browser suite edits an Idea and checks current queuing plus its prior Plan label. No production data or external callback is used.
+后台进程默认每60秒维护规划投递和租约恢复；网页不承担调度。常驻客户端默认每5秒检查项目任务。已有 MCP Events 提供显式 loopback 签名回调、持久投递、幂等事件与有限重试，未连接接收者时任务继续保存在数据库中。
 
-## Durable delivery and recovery
+规划投递按每轮50个任务、50个失效目标、20个请求限额处理；超时8秒，投递 lease30秒，失败以30/60/120/240秒退避，最多5次。接受后5分钟等待领取，规划 lease10分钟，自动恢复最多3次，手动重试冷却60秒。
 
-The D1 outbox and the built Worker's `scheduled` handler share delivery routines with authenticated requests. The generated configuration includes `*/1 * * * *`. This source change does not provision or deploy the cron. Apply migration `0005_parallel_colonel_america.sql` through the reviewed migration process on an explicitly authorized database; its Drizzle journal/snapshot matches the schema. Local tests create empty isolated D1 state and apply each committed migration once. Never reapply raw migrations to existing schemas.
+点子修改后产生新修订；旧 Plan/Tickets 和执行证据保留，并显示来源修订。重新规划不自动启动、取消或扩大任何 Ticket 的执行权限。
 
-A verified new or refreshed subscription immediately scans at most 50 current queued jobs for its owner and sends at most 20 due targets. Targets require the same owner and exact project, or the subscription's empty-project wildcard. Later cron ticks continue the backlog. Refresh preserves accepted targets and permanent/exhausted failures, and revives disconnected targets. Unsubscribe removes the owner subscription and runs the shared bounded routine, marking pending targets `stopped` with `subscription_inactive`. Each invocation invalidates at most 50 targets total, within its owner/job scope; a larger inactive backlog continues on cron. Acquisition checks independently reject inactive rows before housekeeping reaches them.
+网页展示排队、规划、完成、租约到期和失败原因；符合条件时可重试。缺少目标 workspace 或需求信息时由 Agent 回写待澄清事项。API/MCP 只读状态不因读取而推进任务。
 
-A delivery attempt has an eight-second timeout and a 30-second CAS lease. Network failures, timeouts, HTTP 429 and 5xx retry after 30, 60, 120 and 240 seconds, up to five attempts per target/generation. Other 4xx, redirects, invalid callback/secret and oversized events terminate with sanitized reasons. HTTP 410 removes the subscription and records `subscription_gone`. A receiver must deduplicate by event ID: retries and crashed delivery-lease replay preserve the exact ID and event within a generation. Recovery creates a fresh persisted generation/ID. This is at-least-once delivery; acceptance followed by a Worker crash can repeat an ID.
-
-An accepted event waits five minutes for a planner claim. A claim owns a ten-minute lease. Cron releases expired claims or wakes unclaimed consumers with current-revision/generation/token CAS, with at most three automatic recoveries. Exhaustion persists `recovery_exhausted` and allows an explicit manual retry. A disconnected consumer preserves one fresh queued wake without consuming the automatic recovery budget. Active claims, completed and superseded jobs suppress delivery. Equality at the lease deadline counts as expired; an old claim cannot save after expiry or recovery.
-
-`POST /api/planning` requires an authenticated private owner, same origin and a JSON object containing only a nonempty string `ideaId` (maximum 256 characters). Initial insertion checks the Idea owner, kind and current revision inside `INSERT SELECT`. An expired claim, due accepted wake or failed delivery can CAS-reset one generation with a 60-second manual cooldown. Concurrent requests reset once. Pending/backoff, accepted-before-wake, active and completed jobs keep their generation/result. A superseded request returns 409 when caught before retry; edits racing later work can produce a safe `superseded` response. Delivery always rechecks the current revision. Manual retry requests planning only and preserves Ticket, Run, approval and execution behavior.
-
-## Read contracts and UI
-
-`GET /api/planning` and MCP `list_planning_jobs` return explicit public job fields (`id`, `idea_id`, `idea_revision`, `current_revision`, `created`, `result`) plus shared read-only metadata. The Idea records API and MCP `get_idea` attach that metadata as `planning`, alongside compatible `planningStatus` and `planningDelivery` fields. Metadata contains:
-
-- `status`: stored `queued`, `planning` or `done`, or derived `expired`/`superseded`.
-- `lease_expires`, `next_retry_at`, `wake_deadline`, `retry_after`: epoch milliseconds or null; `retry_allowed`: current revision, eligible expired/failed/due-wake state and elapsed cooldown.
-- `generation`, `recoveries`, `recovery_reason`, `attempt_total` across all generations, and `delivery` (`pending`, `retrying`, `accepted`, `partial`, `failed`, `no_subscription`).
-- Current-generation `targets`: `id`, `subscription_id`, `status` (`pending`, `delivering`, `retrying`, `accepted`, `failed`, `stopped`), `attempts`, `last_http_status`, sanitized `reason`, and `next_retry_at`.
-
-No read response contains raw event bodies, owner IDs, callback URLs, signing secrets, claim tokens or delivery tokens. Reads do not perform recovery or mutate job state. MCP claim responses intentionally retain their existing exclusive token/lease contract for the claimant; read metadata never includes that token.
-
-The inbox shows active lease deadline/countdown, expiry, next retry, accepted wake, cooldown and sanitized failure reasons. An eligible expired/failed job offers “重试规划”; backoff/active/cooldown states wait, and missing authoritative metadata retains a usable request action. The browser clock changes presentation only. Server CAS authorizes the request, and account/version/expiry guards continue to discard stale private responses.
-
-Build first, then run `npm run test:planning:recovery`, `npm run test:planning:lifecycle` and `npm run test:planning:browser`. The actual Worker tests use fresh D1, real ephemeral Access JWTs, controlled signed callbacks and actual scheduled dispatch; Chromium uses a test-only loopback ingress and the restrictive browser proxy. Default `npm test` and hosted CI include all three.
+点子、Plan 与 Ticket 后续详情页的分组、字段用途、编辑位置和默认示意见[详情页信息结构](DETAIL-PAGES.md)；规划等待原因和真实错误保持默认可见。
