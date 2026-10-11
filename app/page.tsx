@@ -5,6 +5,7 @@ import { AuthorizationPanel } from "../components/execution/authorization-panel"
 import { ConnectionPanel } from "../components/connectors/connection-panel";
 import { DevelopmentPanel } from "../components/workspace-runs/development-panel";
 import type { FormEvent } from "react";
+import { RecordDetails } from "../components/record-details/record-details";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -22,7 +23,6 @@ import {
   Plug,
   Plus,
   Search,
-  X,
   Check,
   ChevronRight,
   FileText,
@@ -32,19 +32,6 @@ import {
   Layers,
   AlertCircle,
 } from "lucide-react";
-type TextField =
-  | "project"
-  | "text"
-  | "goal"
-  | "scope"
-  | "acceptance"
-  | "allowedActions"
-  | "budget"
-  | "dependencies"
-  | "assumptions"
-  | "queue"
-  | "evidence"
-  | "notes";
 const statuses: Record<string, string> = {
   todo: "待开始",
   running: "进行中",
@@ -58,12 +45,6 @@ const reasons: Record<string, string> = {
   review: "等待验收",
   external: "外部依赖",
   recovery: "恢复确认",
-};
-const priorities: Record<string, string> = {
-  P0: "P0 · 紧急",
-  P1: "P1 · 重要",
-  P2: "P2 · 常规",
-  P3: "P3 · 有空再做",
 };
 function empty(kind: string): RecordDraft {
   return {
@@ -236,24 +217,12 @@ export default function Home() {
     };
   }, [load]);
   function openPlan(idea: Row) {
-    const plan =
-      rows.find((r) => r.kind === "plan" && r.id === idea.planId) ||
-      rows.find(
-        (r) =>
-          r.kind === "plan" &&
-          r.ideaId === idea.id &&
-          r.ideaRevision === idea.revision,
-      );
-    if (plan) {
-      setDraft({ ...plan });
-    } else {
-      setView("plans");
-      setProject("全部项目");
-      setStateFilter("all");
-      setQuery(idea.id);
-    }
+    const plan = rows.find(r => r.kind === "plan" && r.ideaId === idea.id && r.ideaRevision === idea.revision)
+      || rows.find(r => r.kind === "plan" && r.id === idea.planId && r.ideaId === idea.id);
+    if (plan) setDraft({ ...plan });
+    else setError("当前点子尚无可查看的关联计划");
   }
-  async function save(value: RecordDraft) {
+  async function save(value: RecordDraft, reportFailure = false) {
     const version = identityVersion.current;
     setSaving(true);
     setError("");
@@ -280,14 +249,11 @@ export default function Home() {
     } catch (e) {
       if (version === identityVersion.current)
         setError(e instanceof Error ? e.message : "保存失败，内容已保留");
+      if (reportFailure && version === identityVersion.current) throw e;
       return null;
     } finally {
       if (version === identityVersion.current) setSaving(false);
     }
-  }
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (draft && (await save(draft))) setDraft(null);
   }
   async function quickCapture(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -399,32 +365,6 @@ export default function Home() {
     runs: "保留执行时的任务版本与验收证据。",
     integrations: "安装 MCP、关联 workspace，查看真实连接与 Agent 状态。",
   };
-  function field(
-    label: string,
-    key: TextField,
-    area = false,
-    placeholder = "",
-  ) {
-    if (!draft) return null;
-    return (
-      <label className={area ? "wide" : ""}>
-        {label}
-        {area ? (
-          <textarea
-            value={draft[key] || ""}
-            onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-            placeholder={placeholder}
-          />
-        ) : (
-          <input
-            value={draft[key] || ""}
-            onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-            placeholder={placeholder}
-          />
-        )}
-      </label>
-    );
-  }
   function ticketCard(t: Row) {
     return (
       <button
@@ -808,7 +748,7 @@ export default function Home() {
                           <h3>{i.title}</h3>
                         </button>
                         <p className="idea-text">{i.text}</p>
-                        <PlanningStatus job={job} now={planningNow} />
+                        <PlanningStatus job={job} now={planningNow} compact />
                         <div className="idea-footer">
                           <button
                             className="text-btn"
@@ -1043,281 +983,7 @@ export default function Home() {
           <option key={p} value={p} />
         ))}
       </datalist>
-      {draft && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !saving) setDraft(null);
-          }}
-        >
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="dialog-title"
-          >
-            <header>
-              <div>
-                <span className="eyebrow">
-                  {draft.id
-                    ? `${draft.kind.toUpperCase()} · v${draft.revision}`
-                    : "NEW " + draft.kind.toUpperCase()}
-                </span>
-                <h2 id="dialog-title">
-                  {draft.kind === "idea"
-                    ? "原始点子"
-                    : draft.kind === "plan"
-                      ? "规划 Plan"
-                      : draft.kind === "run"
-                        ? "追加执行记录"
-                        : "Ticket 详情"}
-                </h2>
-              </div>
-              <button
-                className="icon-btn"
-                aria-label="关闭"
-                onClick={() => setDraft(null)}
-                disabled={saving}
-              >
-                <X />
-              </button>
-            </header>
-            <form onSubmit={submit}>
-              <div className="form-grid">
-                <label className="wide">
-                  标题
-                  <input
-                    autoFocus
-                    required
-                    maxLength={250}
-                    value={draft.title}
-                    onChange={(e) =>
-                      setDraft({ ...draft, title: e.target.value })
-                    }
-                  />
-                </label>
-                {draft.kind !== "run" && (
-                  <>
-                    {field("项目", "project")}
-                    <label>
-                      优先级
-                      <select
-                        value={draft.priority}
-                        onChange={(e) =>
-                          setDraft({ ...draft, priority: e.target.value })
-                        }
-                      >
-                        {Object.entries(priorities).map(([k, v]) => (
-                          <option key={k} value={k}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </>
-                )}
-                {draft.kind === "idea" ? (
-                  field("原始内容", "text", true, "保留最初的想法与上下文")
-                ) : draft.kind === "run" ? (
-                  <>
-                    <p className="wide form-help">
-                      保存时冻结当前 Ticket 版本；这里只记录已有执行，不会触发
-                      Agent。
-                    </p>
-                    {field(
-                      "执行过程与证据",
-                      "evidence",
-                      true,
-                      "命令、日志摘要、链接、实际结果…",
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {field("目标", "goal", true)}
-                    {field("范围与边界", "scope", true)}
-                    {field(
-                      "验收标准",
-                      "acceptance",
-                      true,
-                      "怎样证明已经完成？",
-                    )}
-                    {field(
-                      "允许的操作",
-                      "allowedActions",
-                      true,
-                      "仅记录已获得授权的操作范围",
-                    )}
-                    {field("预算 / 限额", "budget")}
-                    {field("依赖 Ticket / 外部条件", "dependencies")}
-                    {field("假设与待确认问题", "assumptions", true)}
-                    {draft.ideaId && (
-                      <details className="wide origin">
-                        <summary>查看原始点子</summary>
-                        <p>
-                          {ideas.find((i) => i.id === draft.ideaId)?.text ||
-                            "原始点子不可用"}
-                        </p>
-                      </details>
-                    )}
-                    {draft.kind === "plan" && draft.id && (
-                      <section className="wide related-tickets">
-                        <h3>关联 Tickets</h3>
-                        {tickets
-                          .filter((t) => t.planId === draft.id)
-                          .map((t) => (
-                            <button
-                              key={t.id}
-                              type="button"
-                              onClick={() => setDraft({ ...t })}
-                            >
-                              <span>{t.title}</span>
-                              <small>{statuses[t.status || "todo"]}</small>
-                              <ChevronRight size={16} />
-                            </button>
-                          ))}
-                        {tickets.filter((t) => t.planId === draft.id).length ===
-                          0 && <p>尚未拆分 Ticket</p>}
-                      </section>
-                    )}
-                    {draft.kind === "ticket" && (
-                      <>
-                        <label>
-                          状态
-                          <select
-                            value={draft.status}
-                            onChange={(e) =>
-                              setDraft({ ...draft, status: e.target.value })
-                            }
-                          >
-                            {Object.entries(statuses).map(([k, v]) => (
-                              <option key={k} value={k}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                          {draft.status === "waiting" && (
-                            <label>
-                              等待原因
-                              <select
-                                value={draft.waitingReason}
-                                onChange={(e) =>
-                                  setDraft({
-                                    ...draft,
-                                    waitingReason: e.target.value,
-                                  })
-                                }
-                              >
-                                {Object.entries(reasons).map(([k, v]) => (
-                                  <option key={k} value={k}>
-                                    {v}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
-                        </label>
-                        {field("执行队列", "queue")}
-                        <label>
-                          业务分类
-                          <select
-                            value={draft.category}
-                            onChange={(e) =>
-                              setDraft({ ...draft, category: e.target.value })
-                            }
-                          >
-                            <option value="general">通用</option>
-                            <option value="recruitment">求职</option>
-                          </select>
-                        </label>
-                        <label>
-                          执行类型
-                          <select
-                            value={draft.cadence}
-                            onChange={(e) =>
-                              setDraft({ ...draft, cadence: e.target.value })
-                            }
-                          >
-                            <option value="one_off">一次性</option>
-                            <option value="recurring">
-                              周期性（尚未调度）
-                            </option>
-                          </select>
-                        </label>
-                        {field(
-                          "验收证据（完成时必填）",
-                          "evidence",
-                          true,
-                          "实际结果、测试输出、交付物链接…",
-                        )}
-                        <p className="wide form-help">
-                          状态由你手动更新；不代表已启动
-                          Runner。修改约定会创建新修订版本。
-                        </p>
-                      </>
-                    )}
-                    {field("补充说明", "notes", true)}
-                    {draft.id && (
-                      <details className="wide origin">
-                        <summary>修订历史</summary>
-                        {rows
-                          .filter(
-                            (r) =>
-                              r.kind === "history" && r.recordId === draft.id,
-                          )
-                          .map((r) => (
-                            <p key={r.id}>
-                              v{r.previousRevision} ·{" "}
-                              {new Date(r.created).toLocaleString("zh-CN")}
-                              <br />
-                              {r.snapshot?.title}
-                              <br />
-                              {r.snapshot?.goal || r.snapshot?.text}
-                            </p>
-                          ))}
-                      </details>
-                    )}
-                  </>
-                )}
-              </div>
-              {error && (
-                <p className="form-error" role="alert">
-                  {error}
-                </p>
-              )}
-              <div className="modal-footer">
-                {draft.id && draft.kind === "ticket" && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() =>
-                      setDraft({
-                        ...empty("run"),
-                        title: draft.title,
-                        ticketId: draft.id,
-                        project: draft.project,
-                      })
-                    }
-                  >
-                    追加执行记录
-                  </button>
-                )}
-                <span />
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setDraft(null)}
-                  disabled={saving}
-                >
-                  取消
-                </button>
-                <button className="primary" disabled={saving}>
-                  {saving ? "保存中…" : "保存到本地"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      )}
+      {draft && <RecordDetails key={draft.id ?? draft.kind} record={draft} rows={rows} planning={planning} now={planningNow} saving={saving} error={error} onClose={() => setDraft(null)} onSave={value => save(value, true)} onRequestPlan={requestPlan} newRecord={empty} />}
     </div>
   );
 }

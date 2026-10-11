@@ -57,6 +57,7 @@ try {
   await page.getByRole('button', { name: '点子收件箱', exact: false }).click();
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).click();
   const ideaDialog = page.getByRole('dialog');
+  await ideaDialog.getByRole('button', { name: '编辑', exact: true }).click();
   await ideaDialog.getByRole('textbox', { name: '标题', exact: true }).fill(fixture.ideaTitle + ' revised');
   const revisionSaved = page.waitForResponse(response => response.url() === dev + '/api/records' && response.request().method() === 'POST' && response.status() === 200);
   await ideaDialog.getByRole('button', { name: '保存到本地', exact: true }).click();
