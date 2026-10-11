@@ -17,6 +17,21 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const args=process.argv.slice(2);
 if(args[0]==='login'){console.log('Explicit synthetic runner, no real model authentication');process.exit(0);}
+const overrides=new Map();
+for(let index=0;index<args.length;index++)if(args[index]==='-c'){
+ const value=args[++index],boundary=value.indexOf('=');overrides.set(value.slice(0,boundary),value.slice(boundary+1));
+}
+for(const name of ['unapproved','legacy.host','inline_host','workspace_extra']){
+ if(overrides.get('mcp_servers.'+JSON.stringify(name)+'.enabled')!=='false')throw Error('Unapproved MCP server was not disabled: '+name);
+}
+if(overrides.get('approval_policy')!==JSON.stringify('never'))throw Error('Interactive approval policy must not widen granted authority');
+if(overrides.get('mcp_servers.agent_task_hub.enabled')!=='true')throw Error('Bound project MCP is missing');
+const mcpArgs=JSON.parse(overrides.get('mcp_servers.agent_task_hub.args')||'null');
+const installed=JSON.parse(readFileSync(mcpArgs?.[3]||'', 'utf8'));
+if(JSON.parse(overrides.get('mcp_servers.agent_task_hub.command')||'null')!==process.execPath||
+ JSON.stringify(mcpArgs)!==JSON.stringify([installed.runtime,'mcp','--config',installed.file])||
+ JSON.parse(overrides.get('mcp_servers.agent_task_hub.cwd')||'null')!==installed.workspace)throw Error('MCP does not use this installed project identity');
+if(overrides.get('mcp_servers.agent_task_hub.enabled_tools')!==JSON.stringify(['get_idea','get_ticket','get_plan','list_tickets','list_plans']))throw Error('MCP tool scope must remain the exact read-only allowlist');
 const option=name=>args[args.indexOf(name)+1];
 const cwd=option('--cd'),output=option('--output-last-message');
 let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
@@ -24,7 +39,6 @@ if(option('--sandbox')==='read-only'){
  writeFileSync(output,JSON.stringify({plan:{title:'Workspace archive synthetic Plan',goal:'Test the real planning contract',scope:'Temporary Git project',acceptance:'One scoped Ticket saved',assumptions:'Explicit synthetic model fixture'},tickets:[{key:'readme',title:'Workspace archive actual README check',goal:'Append a checked README change',scope:'README and its actual Node test only',acceptance:'Actual isolated diff and passing Node receipt',dependencies:'',assumptions:'Explicit synthetic model fixture'}]}));
 }else{
  if(option('--sandbox')!=='workspace-write')throw Error('Development must use workspace-write');
- if(!args.includes('--ignore-user-config'))throw Error('Unapproved host MCP configuration must be excluded');
  if(!prompt.includes('Ticket revision: 1'))throw Error('Approved revision missing');
  writeFileSync(join(cwd,'README.md'),readFileSync(join(cwd,'README.md'),'utf8')+'actual isolated integration change\\n');
  writeFileSync(join(cwd,'workspace-loop.test.mjs'),"import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';test('actual isolated README change',()=>assert.match(readFileSync(new URL('./README.md',import.meta.url),'utf8'),/actual isolated integration change/));");
@@ -38,13 +52,14 @@ if(option('--sandbox')==='read-only'){
 `;
 
 const directory=await mkdtemp(join(tmpdir(),'hub-workspace-loop-')),children=new Set(),checks=[];
+const codexHome=join(directory,'synthetic-codex-home');
 let fixture,browser,mcp,agent,config,evidence,status='failed';
 const artifactDirectory=process.env.TEST_ARTIFACT_DIR?resolve(process.env.TEST_ARTIFACT_DIR):null;
 const secrets=[];
 const redact=value=>secrets.reduce((text,secret)=>secret?text.split(secret).join('[redacted]'):text,String(value));
 function ok(message){checks.push(message);console.log('PASS:',message);}
 function launch(executable,args,options={}) {
- const child=spawn(executable,args,{cwd:directory,env:fixtureEnvironment(),detached:true,stdio:['pipe','pipe','pipe'],...options});
+ const child=spawn(executable,args,{cwd:directory,env:{...fixtureEnvironment(),CODEX_HOME:codexHome},detached:true,stdio:['pipe','pipe','pipe'],...options});
  children.add(child);let stdout='',stderr='';
  child.stdout.on('data',data=>{stdout+=data;if(stdout.length>8*1024*1024)child.kill('SIGKILL');});
  child.stderr.on('data',data=>{stderr+=data;if(stderr.length>1024*1024)child.kill('SIGKILL');});
@@ -96,6 +111,9 @@ async function screenshot(page,name){if(artifactDirectory)await page.screenshot(
 
 try {
  if(artifactDirectory)await mkdir(artifactDirectory,{recursive:true});
+ // A temporary host config proves inherited MCP isolation without reading real model credentials.
+ await mkdir(codexHome);
+ await writeFile(join(codexHome,'config.toml'),'mcp_servers.inline_host = { command = "synthetic-inline", enabled = true }\n[mcp_servers.unapproved]\ncommand = "synthetic-host"\n[mcp_servers."legacy.host"]\ncommand = "synthetic-quoted"\n');
  fixture=await localFixture();secrets.push(fixture.aliceToken,fixture.bobToken);
  const project=join(directory,'temporary-project'),unpacked=join(directory,'download');await mkdir(project);await mkdir(unpacked);
  await command('git',['init','--quiet',project]);await writeFile(join(project,'README.md'),'original committed integration baseline\n');
@@ -124,13 +142,15 @@ try {
  ok('Real STDIO MCP negotiates, lists tools and submits/lists project-scoped Ideas and Tickets without owner decisions');
 
  const runner=join(directory,'explicit-synthetic-model-runner.mjs');await writeFile(runner,runnerSource);
+ const workspaceConfig=join(project,'.codex/config.toml');
+ await writeFile(workspaceConfig,(await readFile(workspaceConfig,'utf8'))+'\n[mcp_servers.workspace_extra]\ncommand = "synthetic-project"\n');
  await writeFile(join(project,'README.md'),'existing uncommitted owner change\n');
  const mainStatus=(await command('git',['-C',project,'status','--porcelain'])).stdout;
  await command(process.execPath,[config.runtime,'agent','--config',config.file,'--test-runner',runner,'--once'],{cwd:project});
  const jobs=await mcp.tool('list_planning_jobs');const planned=jobs.jobs.find(job=>job.id===idea.job_id);assert.equal(planned.status,'done');
  const planningResult=JSON.parse(planned.result);assert.equal(planningResult.ticket_ids.length,1);
  const plannedTicket=(await mcp.tool('get_ticket',{ticket_id:planningResult.ticket_ids[0]})).ticket;assert.equal(plannedTicket.title,ticketTitle);assert.match(plannedTicket.assumptions,/synthetic/i);
- assert.equal((await owner('/api/workspace-runs')).runs.length,0);ok('Explicit synthetic read-only model runner saves a revision-bound Plan without execution permission');
+ assert.equal((await owner('/api/workspace-runs')).runs.length,0);ok('Explicit synthetic read-only model runner saves a revision-bound Plan with inherited MCPs disabled and the exact bound read-only MCP allowlist');
 
  const prepared=await owner('/api/workspace-runs',{action:'prepare',ticketId:plannedTicket.id,revision:plannedTicket.revision,connectionId:config.connectionId,requestId:'archive-development',timeoutMs:120000});assert.equal(prepared.run.state,'pending');
  await owner('/api/workspace-runs',{action:'approve',runId:prepared.run.id});
@@ -155,11 +175,21 @@ try {
  await connectionCard.getByText('在线',{exact:true}).waitFor();assert.match(await connectionCard.innerText(),new RegExp('客户端 v'+config.version.replaceAll('.','\\.')));
  await connectionCard.getByText('开发 Agent：未就绪',{exact:true}).waitFor();
  await connectionCard.getByText('Synthetic test runner; this is not real model evidence',{exact:true}).waitFor();await screenshot(page,'workspace-connections');
- await page.getByRole('button',{name:'Ticket 看板',exact:false}).click();const development=page.getByRole('region',{name:'本机 Agent 开发执行'}),runCard=development.locator('article').filter({has:page.getByRole('heading',{name:ticketTitle,exact:true})});
+ await page.getByRole('button',{name:'Ticket 看板',exact:false}).click();
+ const developmentSummary=page.getByText('本机 Agent 开发执行 · 申请、进度与验收',{exact:true});
+ if(await developmentSummary.count() && !(await developmentSummary.evaluate(summary=>summary.parentElement.open)))await developmentSummary.click();
+ const development=page.locator('section[aria-label="本机 Agent 开发执行"]');
+ await development.getByLabel('开发 Ticket',{exact:true}).selectOption(plannedTicket.id);
+ const runCard=development.locator('[data-run-id="'+prepared.run.id+'"]');
  await runCard.getByText('待验收',{exact:true}).waitFor();await runCard.getByText('查看实际变更',{exact:true}).click();await runCard.getByText('查看测试证据',{exact:true}).click();
  assert.match(await runCard.innerText(),/actual isolated integration change/);assert.match(await runCard.innerText(),/node --test workspace-loop\.test\.mjs · 退出码 0/);assert.match(await runCard.innerText(),/synthetic test runner/);
  await screenshot(page,'workspace-review');const acceptedResponse=page.waitForResponse(response=>response.url()===fixture.origin+'/api/workspace-runs'&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='accept');
- await runCard.getByRole('button',{name:'验收通过',exact:true}).click();assert.equal((await acceptedResponse).status(),200);await runCard.getByText('已验收',{exact:true}).waitFor();await screenshot(page,'workspace-accepted');
+ await runCard.getByRole('button',{name:'验收通过',exact:true}).click();assert.equal((await acceptedResponse).status(),200);
+ // Acceptance increments the Ticket revision: reopen the explicitly chosen refreshed contract.
+ await development.getByRole('button',{name:'重新选择 Ticket',exact:true}).waitFor();
+ await development.getByRole('button',{name:'重新选择 Ticket',exact:true}).click();
+ await development.getByLabel('开发 Ticket',{exact:true}).selectOption(plannedTicket.id);
+ await runCard.getByText('已验收',{exact:true}).waitFor();await screenshot(page,'workspace-accepted');
  const accepted=await owner('/api/workspace-runs?runId='+encodeURIComponent(prepared.run.id));assert.equal(accepted.run.state,'succeeded');
  const ticketAfter=(await mcp.tool('get_ticket',{ticket_id:plannedTicket.id})).ticket;assert.equal(ticketAfter.status,'done');assert.equal(ticketAfter.revision,2);
  const records=await owner('/api/records');assert.ok(records.records.some(record=>record.kind==='history'&&record.recordId===plannedTicket.id&&record.previousRevision===1));
