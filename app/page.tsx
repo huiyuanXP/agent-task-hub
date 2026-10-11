@@ -1,5 +1,10 @@
 "use client";
 import { useEffect, useState, useRef, useCallback } from "react";
+import {TicketBoard} from "../components/board/ticket-board";
+import {TicketCard} from "../components/board/ticket-card";
+import {TicketActionDialog} from "../components/board/ticket-action-dialog";
+import {sortTickets,filterTickets,defaultTicketSort} from "../lib/tickets/selectors.mts";
+import type {TicketSort} from "../lib/tickets/selectors.mts";
 import { PlanningStatus, planningControls } from "../components/planning-status";
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
 import { ConnectionPanel } from "../components/connectors/connection-panel";
@@ -109,6 +114,8 @@ export default function Home() {
       jobs: [],
       subscriptions: 0,
     });
+  const [ticketSort,setTicketSort]=useState<TicketSort>(defaultTicketSort);
+  const [boardAction,setBoardAction]=useState<{ticket:Row;target:string}|null>(null);
   const [planningNow, setPlanningNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setPlanningNow(Date.now()), 1000);
@@ -124,6 +131,8 @@ export default function Home() {
     identityVersion.current++;
     setAccountVersion(identityVersion.current);
     setRows([]);
+    setBoardAction(null);
+    setTicketSort(defaultTicketSort);
     setPlanning({ jobs: [], subscriptions: 0 });
     setDraft(null);
     setCapture("");
@@ -425,31 +434,10 @@ export default function Home() {
       </label>
     );
   }
-  function ticketCard(t: Row) {
-    return (
-      <button
-        className="ticket-card"
-        key={t.id}
-        onClick={() => setDraft({ ...t })}
-      >
-        <div className="card-top">
-          <span className="id">T-{t.id.slice(0, 6).toUpperCase()}</span>
-          <span className={"priority " + t.priority}>{t.priority}</span>
-        </div>
-        <h3>{t.title}</h3>
-        {t.goal && <p>{t.goal}</p>}
-        <div className="card-bottom">
-          <span className="project-tag">{t.project}</span>
-          <span>v{t.revision}</span>
-        </div>
-        {t.status === "waiting" && (
-          <span className="wait-tag">
-            {reasons[t.waitingReason || "clarification"]}
-          </span>
-        )}
-      </button>
-    );
-  }
+  const visibleTickets=sortTickets(filterTickets(tickets,{project,query,status:stateFilter}),ticketSort);
+  const openBoardIntent=(ticket:Row,target:string)=>{if(target!==ticket.status)setBoardAction({ticket,target});};
+  const openBoardExecution=(ticket:Row)=>setBoardAction({ticket,target:"execute"});
+  function ticketCard(ticket:Row){return <TicketCard key={ticket.id} ticket={ticket} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>;}
   return (
     <div className="app">
       <aside className="sidebar">
@@ -705,7 +693,7 @@ export default function Home() {
                 </strong>
                 <span>
                   {
-                    filtered(
+                    view === "board" ? visibleTickets.length : filtered(
                       view === "inbox"
                         ? ideas
                         : view === "plans"
@@ -753,8 +741,11 @@ export default function Home() {
                         </option>
                       ))}
                     </select>
+                    <select aria-label="任务排序" value={ticketSort.field} onChange={event=>setTicketSort({...ticketSort,field:event.target.value as TicketSort["field"]})}><option value="created">创建时间</option><option value="updated">更新时间</option><option value="priority">优先级（仅展示）</option></select>
+                    <select aria-label="排序方向" value={ticketSort.direction} onChange={event=>setTicketSort({...ticketSort,direction:event.target.value as TicketSort["direction"]})}><option value="desc">{ticketSort.field==="priority"?"低到高":"新到旧"}</option><option value="asc">{ticketSort.field==="priority"?"高到低":"旧到新"}</option></select>
                     <button
                       className="icon-btn"
+                      aria-label="切换列表或看板"
                       title="切换列表或看板"
                       onClick={() => setList(!list)}
                     >
@@ -917,33 +908,7 @@ export default function Home() {
                   onRecordsChanged={() => void load(true)}
                 />
               )}
-              {view === "board" && (
-                <div className={"board " + (list ? "as-list" : "")}>
-                  {Object.entries(statuses)
-                    .filter(([s]) => stateFilter === "all" || s === stateFilter)
-                    .map(([s, label]) => (
-                      <section className={"column " + s} key={s}>
-                        <header>
-                          <span className="state-dot" />
-                          <h2>{label}</h2>
-                          <span>
-                            {
-                              filtered(tickets).filter((t) => t.status === s)
-                                .length
-                            }
-                          </span>
-                        </header>
-                        {filtered(tickets)
-                          .filter((t) => t.status === s)
-                          .map(ticketCard)}
-                        {filtered(tickets).filter((t) => t.status === s)
-                          .length === 0 && (
-                          <div className="column-empty">暂无任务</div>
-                        )}
-                      </section>
-                    ))}
-                </div>
-              )}
+              {view === "board" && <TicketBoard tickets={visibleTickets} list={list} statusFilter={stateFilter} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>}
               {view === "review" && (
                 <div className="idea-grid">
                   {filtered(waiting).map(ticketCard)}
@@ -1043,6 +1008,7 @@ export default function Home() {
           <option key={p} value={p} />
         ))}
       </datalist>
+      {boardAction&&<TicketActionDialog key={boardAction.ticket.id+":"+boardAction.ticket.revision+":"+boardAction.target} ticket={boardAction.ticket} target={boardAction.target} current={rows.some(row=>row.id===boardAction.ticket.id&&row.revision===boardAction.ticket.revision)} onClose={()=>setBoardAction(null)} onAuthenticationDenied={panelAuthenticationDenied} onRecordsChanged={()=>void load(true)}/>}
       {draft && (
         <div
           className="modal-overlay"
