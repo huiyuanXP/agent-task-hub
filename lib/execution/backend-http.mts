@@ -26,6 +26,18 @@ export async function handleCheckpoint(request:Request,env:BackendEnvironment):P
   const text=JSON.stringify(data);return new Response(text,{status,headers:{...headers,'Content-Type':'application/json','x-execution-signature':JSON.stringify(await signReply(signing,signed,status,text))}});
 }
 type BackendResult = { backendId?: string; phase: string; receipts: BackendAttestation[] };
+function assertRunScope(context: AuthorizationContext, runId: string) {
+  if (context.executionRunId !== undefined && context.executionRunId !== runId) {
+    throw new ExecutionError('NOT_FOUND', 'Run not found', 404);
+  }
+}
+/** Validate the whole response's query binding before any receipt can mutate storage. */
+function assertReceiptScope(receipts: BackendAttestation[], permit: DispatchPermit) {
+  if (!Array.isArray(receipts) || receipts.length > 3 || receipts.some(receipt =>
+    receipt?.claims?.owner !== permit.owner || receipt?.claims?.permitId !== permit.permitId || receipt?.claims?.runId !== permit.runId)) {
+    throw new ExecutionError('INVALID_EVIDENCE', 'Verified bound backend attestation required', 409);
+  }
+}
 
 /** Reconcile one immutable permit; only ingestAttestation can close its reservation. */
 async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, run: Run, row: PermitRow) {
@@ -36,7 +48,7 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
     const cancel = await signedFetch(config.transport, '/cancel', { permit });
     if (cancel.status !== 200) throw Error('Cancellation transport unavailable');
     const { receipts } = cancel.data as BackendResult;
-    if (!Array.isArray(receipts) || receipts.length > 3) throw Error('Invalid cancellation result');
+    assertReceiptScope(receipts, permit);
     for (const receipt of receipts) await ingestAttestation(db, evidenceContext, receipt);
   }
   const response = await signedFetch(config.transport, '/result', { permit });
@@ -45,7 +57,7 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
   }
   if (response.status !== 200) throw Error('Backend unavailable');
   const result = response.data as BackendResult;
-  if (!Array.isArray(result.receipts) || result.receipts.length > 3) throw Error('Invalid backend result');
+  assertReceiptScope(result.receipts, permit);
   for (const receipt of result.receipts) await ingestAttestation(db, evidenceContext, receipt);
   if (result.phase === 'running') {
     const current = await getRun(db, context.owner, run.id);
@@ -61,6 +73,8 @@ async function reconcilePermit(db: ExecutionDatabase, context: AuthorizationCont
 
 /** A prepared successor can recover its terminal predecessor across UI reloads. */
 async function reconcileTicketReservation(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, run: Run) {
+  // A Run-specific principal cannot recover a different Run's physical occupation.
+  if (context.executionRunId !== undefined) return;
   // The unique physical-Ticket index bounds this to one owned occupying permit.
   const occupied = await db.prepare(`SELECT p.* FROM execution_permits p
     JOIN execution_runs r ON r.owner=p.owner AND r.id=p.run_id
@@ -73,6 +87,7 @@ async function reconcileTicketReservation(db: ExecutionDatabase, context: Author
 }
 
 export async function reconcileBackend(db: ExecutionDatabase, context: AuthorizationContext, env: BackendEnvironment, runId: string) {
+  assertRunScope(context, runId);
   const run = await getRun(db, context.owner, runId);
   const permit = await permitForRun(db, context.owner, runId);
   if (!permit) {
@@ -85,13 +100,15 @@ export async function handleBackendRequest(db:ExecutionDatabase,context:Authoriz
   if(!context)return Response.json({error:'Authentication required'},{status:401,headers});
   try{
     if(request.method==='GET'){
+      const q=new URL(request.url).searchParams;
+      if([...q.keys()].length!==0){if([...q.keys()].length!==1||!q.has('runId'))invalid();assertRunScope(context,q.get('runId')!);}
       configuredRegistry(env);const config=await backendConfiguration(env);
-      const q=new URL(request.url).searchParams;if([...q.keys()].length===0){const result=await signedFetch(config.transport,'/health',{});if(result.status!==200)throw Error();return Response.json(result.data,{headers});}
-      if([...q.keys()].length!==1||!q.has('runId'))invalid();return Response.json(await reconcileBackend(db,context,env,q.get('runId')!),{headers});
+      if([...q.keys()].length===0){const result=await signedFetch(config.transport,'/health',{});if(result.status!==200)throw Error();return Response.json(result.data,{headers});}
+      return Response.json(await reconcileBackend(db,context,env,q.get('runId')!),{headers});
     }
     if(request.method!=='POST')return Response.json({error:'Method not allowed'},{status:405,headers});
     if(request.headers.get('origin')!==new URL(request.url).origin)return Response.json({error:'Invalid request origin'},{status:403,headers});
-    const input=await readBody(request);exactObject(input,['action','runId','kind','path']);boundedId(input.runId);
+    const input=await readBody(request);exactObject(input,['action','runId','kind','path']);boundedId(input.runId);assertRunScope(context,input.runId);
     if (input.action === 'start') {
       exactObject(input, ['action', 'runId']);
       context = { ...context, registry: configuredRegistry(env) };

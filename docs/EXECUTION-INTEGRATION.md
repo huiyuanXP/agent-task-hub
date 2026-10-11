@@ -1,6 +1,6 @@
 # 原生执行接口衔接评估
 
-本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。交付状态为评估/设计文档；下文的 Worker 接口、consumer 与字节预算属于拟实施合同，安装功能以现役源码及[功能清单](FEATURES.md)为准。
+本评估为 `pr39-integrate` 提供实施输入：复用 Run 专属 Worker、generation 租约、持久 consumer、permit 对账与 MCP 字节分页机制，通过本地账户、原生 SQLite 和现役签名 Docker 后端接入。Worker 接口与 consumer 属于拟实施合同；MCP 字节分页与原生客户端有界读取已实施，现役后端已校验查询对象与整组收据的 owner/permitId/runId 绑定，并支持受信任 adapter 的 Run 范围限制。安装功能以现役源码及[功能清单](FEATURES.md)为准。
 
 ## 现役执行链与身份
 
@@ -20,14 +20,14 @@ Docker permit 的原子插入、合同/授权/预算绑定和物理占用在 [di
 
 采用独立 Worker machine 端点，令本地 owner、项目连接和 Run 委派成为三个明确 principal。Docker consumer 的执行对象限定 `execution_runs`；本机开发继续使用项目连接、现役 workspace 租约、本地模型和 owner review。
 
-| 接口或模块 | 采用的机制 | 原生接入结果（拟实施） |
+| 接口或模块 | 采用的机制 | 原生接入与实施状态 |
 | --- | --- | --- |
 | `/api/execution/workers` | owner provision/list/revoke，稳定 requestId、有限发放、secret verifier | 接入现役本地 session/API token，绑定 owner、origin、发放 token 摘要/期限和冻结 Run；owner/project 从可信数据解析。 |
 | `/api/execution/worker-mcp` | Run 专属八工具与独立 Worker token | 新增精确 machine route；在 Node 入口与 Next route 共同交付 credential 分派，握手及工具调用均通过 Worker 认证。 |
 | Worker SQL 与 guard | credentials、leases、actions、checks 四表；generation/请求唯一索引；写事务前后检查 | 追加有序 `migrations/*.sql`，接入 `LocalDatabase.batch`，将 issuer 生命周期与 owner 关联落到本地账户表。 |
 | 固定操作后端 | permit-bound receipt ingestion、受限历史 reconcile | 复用 `createDispatchPermit`、`reconcileBackend`、`ingestAttestation` 与签名 transport，并约束到查询的 Run/permit。 |
 | consumer CLI | secret/ID 先持久化、flock、原子 journal、幂等重试 | 使用本地 API token bootstrap/revoke 和 Worker token runtime；transport 固定到选定 machine 端点。 |
-| MCP 查询 | UTF-8 双表示 envelope 预算、按字节分页 | 采用具名查询 options，保留可信 project 链与游标作用域，服务和安装客户端共同实现响应边界。 |
+| MCP 查询 | UTF-8 双表示 envelope 预算、按字节分页 | 已实施具名查询 options 与完整 UTF-8 响应边界，保留可信 project 链与游标作用域；下载包的客户端刷新安装后采用相同边界。 |
 
 ### 本地账户派生 Worker
 
@@ -64,7 +64,7 @@ owner Worker 管理 route 使用 `authenticateHeaders`/受信任 session 和实�
 
 Docker 租约 generation 与 workspace 的 30 秒租约各在自己的表和状态机中推进。执行 approval 失效后，有效 Worker credential 可使用历史 reconcile 完成/取消已有 permit；Worker 或其 issuer 已失效时，恢复由 owner 路径处理。reconcile 保持既有 deadline 和操作范围。
 
-后端接入保留 [backend-http.mts:35][pr-backend] 的 receipt `permitId/runId` 与当前查询对象匹配，以及 [:68][pr-reservation]、[:83][pr-run-scope] 的受信任 `executionRunId` 限制。当前 ingestion 校验签名与 receipt 自身绑定，见 [attestations.mts:55](../lib/execution/attestations.mts#L55)；接入时再校验它对应正在查询的 permit。Worker 的 context 由认证主体产生，前任 Run 物理占用由现役 owner recovery 关闭，见 [backend-http.mts:63](../lib/execution/backend-http.mts#L63)。
+后端接入保留 [backend-http.mts:35][pr-backend] 的 receipt `permitId/runId` 与当前查询对象匹配，以及 [:68][pr-reservation]、[:83][pr-run-scope] 的受信任 `executionRunId` 限制。现役后端在任何收据入库前[校验整组 receipt](../lib/execution/backend-http.mts#L35) 与查询 permit 的 owner/permitId/runId 一致；ingestion 继续校验签名与 receipt 自身绑定，见 [attestations.mts:55](../lib/execution/attestations.mts#L55)。受信任 adapter 可在 `AuthorizationContext.executionRunId` 绑定唯一 Run；[HTTP 与 reconcile](../lib/execution/backend-http.mts#L89) 在读取或写入前拒绝其他 Run，绑定主体不恢复前任 Run 的物理占用。该字段只由服务端传入，尚无 Worker 认证端点；owner recovery 仍关闭前任物理占用，见 [backend-http.mts:75](../lib/execution/backend-http.mts#L75)。
 
 ### consumer 持久状态与恢复
 
@@ -76,11 +76,13 @@ Docker 租约 generation 与 workspace 的 30 秒租约各在自己的表和状�
 
 ### MCP 字节预算与项目隔离
 
-采用 [bounds.mts:9][pr-bounds] 的 owner/task-read 4 MiB UTF-8 envelope、text 与 structuredContent 双表示计费、metadata/cursor 预留，以及 [cursor.mts][pr-cursor] 的字节截页和最后实际发出项 continuation。Worker envelope 使用独立 1 MiB 上限；超大单项返回有界错误，nested detail 将上下文占用计入分页预算。
+现役 [bounds.mts](../lib/task-reads/bounds.mts) 按 UTF-8 计量完整 4 MiB JSON envelope，text 与 structuredContent 双表示及 JSON 转义共同计费，查询为 RPC ID 和路由 metadata 预留 256 KiB。分页在 [cursor.mts](../lib/task-reads/cursor.mts) 以最后实际返回项产生 continuation；单项过大返回有界 `RESPONSE_TOO_LARGE`。详情的父记录、原点子/source revision、linkage 和 nested page 共享预算。
 
-查询函数采用具名 options `{ project?: string, byteBudget?: number }`。现役 [listRecords:16](../lib/task-reads/queries.mts#L16) 与 [listTicketRuns:103](../lib/task-reads/runs.mts#L103) 第五参数为可信 `project?: string`，参考实现 [listRecords:17][pr-queries] 与 [listTicketRuns:104][pr-runs] 同位置为数字 `byteBudget`；签名适配必须迁移全部调用点。现役 [dispatchTaskReadTool:21](../lib/task-reads/mcp.mts#L21) 和 [connector 调用:37](../lib/connectors/mcp.mts#L37) 持续传递已认证 project，SQL、详情关联 Idea/Plan/历史及 cursor context 保留项目条件。
+查询使用具名 `TaskReadOptions { project?: string, byteBudget?: number }`，见 [queries.mts](../lib/task-reads/queries.mts) 与 [runs.mts](../lib/task-reads/runs.mts)。[dispatchTaskReadTool](../lib/task-reads/mcp.mts) 和 [connector 调用](../lib/connectors/mcp.mts) 持续传递已认证 project；SQL、详情关联 Idea/Plan/历史及 cursor context 保留项目条件。tool 输入不接受 `byteBudget` 或调用者身份字段。
 
-服务与安装 CLI/STDIO bridge 一起采用完整 UTF-8 envelope 边界。[connectors/http.mts:10](../lib/connectors/http.mts#L10) 直接产生 JSON 响应，[common.mjs:54](../connector/common.mjs#L54) 当前读完整文本后检查 2 MiB 字符长度；接入时共同实现流式有界读取、4 MiB 响应与查询预算。[owner MCP body:58](../app/mcp/route.ts#L58) 采用领域已有的有界 `readBody` 并保留现役 RPC/权限校验。验证使用中文、emoji、转义字符、双表示、nested context、跨项目游标与分页不漏不重的实际响应。
+owner 与项目 connector 都在返回前检查完整 envelope。owner [MCP route](../app/mcp/route.ts) 使用领域有界 `readBody(req,200000)`，沿用现役 RPC/权限校验；固定执行入口保留原 16 KiB 默认 body 上限。下载包 [common.mjs](../connector/common.mjs) 对 HTTP 响应流式累计最多 4 MiB，超限立即取消且拒绝非法 UTF-8；[STDIO bridge](../connector/mcp.mjs) 保留跨 chunk 多字节字符，输入行最多 200000 bytes、完整 JSON 回复最多 4 MiB，超限行丢弃后继续接收下一行。已安装 runtime 通过重新下载并安装刷新，现有连接身份与权限不变。
+
+实现根据本地原生合同原创，机制参考 [MCP 字节边界][pr-bounds] 与 [游标分页][pr-cursor]；未复制许可待确认的外部应用模块。实际验证覆盖中文、emoji、转义、双表示、nested context、跨项目游标、exact/one-byte overflow、未知长度分块取消及分页不漏不重，参见 [MCP 读取合同](MCP-TASK-READS.md)。
 
 ## 后续实施单元与验收
 
@@ -91,9 +93,11 @@ Docker 租约 generation 与 workspace 的 30 秒租约各在自己的表和状�
 | A：查询与收据绑定 | MCP 字节分页/options、owner 与项目 connector envelope、安装客户端有界读取、查询对象的 permit/run receipt 校验 | 实际 UTF-8 响应边界、项目隔离和只读表快照；可信 foreign receipt 拒绝；workspace 合同继续通过。 |
 | B：Docker Worker 与 consumer | 本地 migration/issuer、owner 与 machine route、原子 guard、leases/actions、受限 reconcile、consumer CLI 和原生 fixture | 本地账户撤销/expiry、两进程竞争、请求回复丢失恢复、八工具隔离、相同 permit/deadline、真实后端结果/停止与 owner recovery。 |
 
-模块 A 可单独交付；模块 B 的认证、迁移、guard、CLI 与恢复验证构成完整实现。权限、注册操作、预算与审批继续由现役执行域决定；每个实施 Run 使用其单独批准的项目/workspace 和操作范围。
+模块 A 已完成原生源码适配，可单独交付；模块 B 的认证、迁移、guard、CLI 与恢复验证构成完整实现。权限、注册操作、预算与审批继续由现役执行域决定；每个实施 Run 使用其单独批准的项目/workspace 和操作范围。
 
 现有行为检查可从 `tests/local/{auth,database}.test.mjs`、`tests/workspace-runs/service.test.mjs`、`tests/execution/{authorization,dispatch}.test.mjs` 按名称筛选账户撤销、SQLite 原子性、审批边界、workspace 交付/期限及 permit 绑定；执行 Node `--test` 时加 `--experimental-test-isolation=none` 展示实际子测试。文档交付只验证这些已实现合同。
+
+已实施的收据查询绑定与受信任 Run 范围限制由 `tests/execution/backend-http.test.mjs` 使用新临时 SQLite、合成签名密钥和真实 loopback 协议 peer 验证；该 fixture 不代表实际 Docker 执行。
 
 实现 A 时选择 `test:connectors`、`test:mcp:task-reads` 和相关 `test:execution:domain`；实现 B 时增加 `test:local`、`test:execution:api`、`test:workspace-loop` 与原生 Worker/consumer 测试。参考 [consumer fixture:7][pr-fixture] 的接入需使用新临时 SQLite、本地测试账户/随机 API token 与 loopback server；协议/consumer 脚本在实际交付时纳入现役 package scripts。代码交付按影响完成 build、tsc、lint；真实 Docker 端到端使用 daemon、锁定镜像和现役签名 fixture，分别验证 result/cancel_fence/stop、后端失败与恢复。具体 harness 及前置条件见 [TESTING.md](TESTING.md)。
 
@@ -101,7 +105,7 @@ Docker 租约 generation 与 workspace 的 30 秒租约各在自己的表和状�
 
 机制来源为 [PR #39：Complete Run-scoped MCP execution leases and durable consumer](https://github.com/huiyuanXP/agent-task-hub/pull/39)，源码引用固定到 `92bd3ee788c1f22a35ccdacf140030d0463f7937`，通过本地 Git 对象 `git show` 核对。现役合同通过本 worktree 的实际文件核对；外部 PR 状态按私有证据的采集时刻解释。
 
-应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
+应用源码许可状态为待确认：固定树中的 MIT 许可文件分别覆盖 [Superpowers skills][pr-skill-license]、[vendored shadcn CSS][pr-css-license] 和 [构建插件][pr-plugin-license]；应用模块的代码复用许可由后续实施确认并保留来源与适用 notices；现役模块 A 使用本地原创实现，未复制这些应用模块。本评估引用接口和机制，代码采用的许可凭据随具体实施范围记录。
 
 私有研究及历史证据位于主 workspace 的 `.local/evidence/parallel-tickets-20261009/`：
 

@@ -1,3 +1,4 @@
+import { resultBudget, responseTooLarge, taskResultBytes } from './bounds.mts';
 import { boundedId, exactObject, invalid } from '../execution/errors.mts';
 import { oneOf, runSources, type Filters, type ReadResource } from './validation.mts';
 export interface CursorContext { owner: string; resource: ReadResource; filters: Filters }
@@ -38,8 +39,20 @@ export async function decodeCursor(cursor: string | undefined, context: CursorCo
   } catch { invalid('Invalid task query cursor'); }
 }
 export interface Page<T> { items: T[]; next_cursor: string | null }
-export async function makePage<T extends CursorPosition, U>(rows: T[], limit: number, context: CursorContext, project: (row: T) => U | Promise<U>): Promise<Page<U>> {
-  const selected = rows.slice(0, limit);
-  const last = selected.at(-1);
-  return { items: await Promise.all(selected.map(project)), next_cursor: rows.length > limit && last ? await encodeCursor({ created: last.created, id: last.id, ...(context.resource === 'ticket_runs' ? { source: last.source } : {}) }, context) : null };
+export async function makePage<T extends CursorPosition, U>(rows: T[], limit: number, context: CursorContext, project: (row: T) => U | Promise<U>, byteBudget?: number): Promise<Page<U>> {
+  const budget = resultBudget(byteBudget);
+  let page: Page<U> = { items: [], next_cursor: null };
+  if (taskResultBytes(page) > budget) responseTooLarge();
+  for (const row of rows.slice(0, limit)) {
+    const item = await project(row);
+    const hasMore = page.items.length + 1 < rows.length;
+    const next: Page<U> = { items: [...page.items, item], next_cursor: hasMore
+      ? await encodeCursor({ created: row.created, id: row.id, ...(context.resource === 'ticket_runs' ? { source: row.source } : {}) }, context) : null };
+    if (taskResultBytes(next) > budget) {
+      if (page.items.length === 0) responseTooLarge();
+      return page;
+    }
+    page = next;
+  }
+  return page;
 }
