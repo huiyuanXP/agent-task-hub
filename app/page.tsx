@@ -93,6 +93,7 @@ function empty(kind: string): RecordDraft {
 }
 export default function Home() {
   const [rows, setRows] = useState<Row[]>([]),
+    [projects, setProjects] = useState<string[]>([]),
     [view, setView] = useState("inbox"),
     [query, setQuery] = useState(""),
     [project, setProject] = useState("全部项目"),
@@ -120,10 +121,18 @@ export default function Home() {
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const identityVersion = useRef(0);
   const loadSequence = useRef(0);
+  const captureProjectExplicit = useRef(false);
+  function selectProject(value: string) {
+    setProject(value);
+    if (!captureProjectExplicit.current)
+      setCaptureProject(value === "全部项目" ? "通用" : value);
+  }
   const clearPrivateState = useCallback(() => {
     identityVersion.current++;
     setAccountVersion(identityVersion.current);
     setRows([]);
+    setProjects([]);
+    captureProjectExplicit.current = false;
     setPlanning({ jobs: [], subscriptions: 0 });
     setDraft(null);
     setCapture("");
@@ -162,6 +171,10 @@ export default function Home() {
       expireSession();
     }
   }, [accountId, accountVersion, expireSession]);
+  const projectCatalogChanged = useCallback((entries: { name: string }[]) => {
+    if (identityVersion.current === accountVersion && sessionRef.current?.user.userId === accountId)
+      setProjects(entries.map(entry => entry.name));
+  }, [accountId, accountVersion]);
   const load = useCallback(
     async (silent = false) => {
       const seq = ++loadSequence.current;
@@ -195,12 +208,13 @@ export default function Home() {
           }),
         );
         if (seq !== loadSequence.current) return;
-        const d = (await r.json()) as { records: Row[]; error?: string },
+        const d = (await r.json()) as { records: Row[]; projects: { name: string }[]; error?: string },
           pd = (await pr.json()) as PlanningState;
         if (!r.ok) throw Error(d.error);
         if (!pr.ok) throw Error(pd.error);
         if (seq === loadSequence.current) {
           setRows(d.records);
+          setProjects(d.projects.map(entry => entry.name));
           setPlanning(pd);
           setError("");
         }
@@ -298,7 +312,11 @@ export default function Home() {
       text: capture.trim(),
       project: captureProject,
     });
-    if (d) setCapture("");
+    if (d) {
+      setCapture("");
+      captureProjectExplicit.current = false;
+      setCaptureProject(project === "全部项目" ? "通用" : project);
+    }
   }
   async function requestPlan(idea: Row) {
     const version = identityVersion.current;
@@ -368,14 +386,11 @@ export default function Home() {
     plans = rows.filter((r) => r.kind === "plan"),
     tickets = rows.filter((r) => r.kind === "ticket"),
     runs = rows.filter((r) => r.kind === "run");
-  const projects = Array.from(
-    new Set(rows.map((r) => r.project).filter((p): p is string => !!p)),
-  ).sort();
   const waiting = tickets.filter((r) => r.status === "waiting");
   const filtered = (items: Row[]) =>
     items.filter(
       (r) =>
-        (project === "全部项目" || r.project === project) &&
+        (project === "全部项目" || (r.project || "通用") === project) &&
         (!query ||
           [r.title, r.text, r.goal, r.project, r.id, r.planId, r.ideaId]
             .join(" ")
@@ -420,6 +435,7 @@ export default function Home() {
             value={draft[key] || ""}
             onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
             placeholder={placeholder}
+            list={key === "project" ? "projects" : undefined}
           />
         )}
       </label>
@@ -467,6 +483,7 @@ export default function Home() {
             setDraft(null);
             setCapture("");
             setCaptureProject("通用");
+            captureProjectExplicit.current = false;
             setNotice("");
             setError("");
             void load();
@@ -514,7 +531,7 @@ export default function Home() {
         <div className="project-list">
           <button
             className={project === "全部项目" ? "selected" : ""}
-            onClick={() => setProject("全部项目")}
+            onClick={() => selectProject("全部项目")}
           >
             <span className="project-square" />
             全部项目
@@ -523,7 +540,7 @@ export default function Home() {
             <button
               key={p}
               className={project === p ? "selected" : ""}
-              onClick={() => setProject(p)}
+              onClick={() => selectProject(p)}
             >
               <span className="project-square" />
               {p}
@@ -591,9 +608,9 @@ export default function Home() {
               className="primary"
               onClick={() =>
                 view === "inbox"
-                  ? setDraft(empty("idea"))
+                  ? setDraft({ ...empty("idea"), project: project === "全部项目" ? "通用" : project })
                   : view === "plans"
-                    ? setDraft(empty("plan"))
+                    ? setDraft({ ...empty("plan"), project: project === "全部项目" ? "通用" : project })
                     : createTicket()
               }
             >
@@ -674,7 +691,10 @@ export default function Home() {
                   <input
                     aria-label="点子所属项目"
                     value={captureProject}
-                    onChange={(e) => setCaptureProject(e.target.value)}
+                    onChange={(e) => {
+                      captureProjectExplicit.current = true;
+                      setCaptureProject(e.target.value);
+                    }}
                     list="projects"
                   />
                 </label>
@@ -732,7 +752,7 @@ export default function Home() {
                 <select
                   aria-label="项目筛选"
                   value={project}
-                  onChange={(e) => setProject(e.target.value)}
+                  onChange={(e) => selectProject(e.target.value)}
                 >
                   <option>全部项目</option>
                   {projects.map((p) => (
@@ -1022,6 +1042,8 @@ export default function Home() {
                 <ConnectionPanel
                   key={session?.user.userId ?? "anonymous"}
                   projects={projects}
+                  initialProject={project === "全部项目" ? "通用" : project}
+                  onProjectsChanged={projectCatalogChanged}
                   onAuthenticationDenied={panelAuthenticationDenied}
                 />
               )}

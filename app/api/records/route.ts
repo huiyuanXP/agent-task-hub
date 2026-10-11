@@ -4,6 +4,7 @@ import { ideaWithPlanning } from "../../../lib/planning-state";
 import { deliverJob, EVENT } from "../../../lib/events";
 import { getCurrentUser } from "../../../lib/current-user";
 import { database } from "../../../lib/store";
+import { listProjects } from "../../../lib/projects/catalog.mts";
 const kinds = ["idea", "plan", "ticket", "run"];
 const states = ["todo", "running", "waiting", "done", "error"];
 export async function GET() {
@@ -17,6 +18,7 @@ export async function GET() {
       .all<RecordRow>();
     return Response.json(
       {
+        projects: await listProjects(database(), user.userId),
         records: await Promise.all(
           results.map((r) =>
             r.kind === "idea"

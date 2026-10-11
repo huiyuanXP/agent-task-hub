@@ -8,6 +8,7 @@ npx --no-install tsc --noEmit
 npm run lint
 npm run test:local
 npm run test:connectors
+node --experimental-strip-types tests/connectors/project-catalog-browser.mjs
 ```
 
 原生测试使用新临时 SQLite、真实本地测试账户、不同 loopback 端口和受管进程组。不得复制现有数据、模型认证或客户端 token 作为测试 fixture。API/MCP 测试保留 owner/project 隔离、严格参数、修订冲突、分页和只读快照语义。
