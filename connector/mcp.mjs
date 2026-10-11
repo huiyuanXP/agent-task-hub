@@ -1,10 +1,19 @@
-import { heartbeat, redact, request, VERSION } from './common.mjs';
+import { StringDecoder } from 'node:string_decoder';
+import { heartbeat, MAX_RESPONSE_BYTES, redact, request, VERSION } from './common.mjs';
+
+export const MAX_STDIO_REQUEST_BYTES = 200000;
 
 export async function serveMcp(config) {
   let initialized = false;
   const pending = new Map();
   const tasks = new Set();
-  const respond = value => process.stdout.write(JSON.stringify(value) + '\n');
+  const respond = value => {
+    let line = JSON.stringify(value);
+    if (Buffer.byteLength(line, 'utf8') > MAX_RESPONSE_BYTES) {
+      line = JSON.stringify({ jsonrpc: '2.0', id: value.id ?? null, error: { code: -32000, message: 'STDIO response exceeds the limit' } });
+    }
+    process.stdout.write(line + '\n');
+  };
   const beat = () => heartbeat(config, 'mcp').catch(error => process.stderr.write(`MCP heartbeat: ${redact(error, config)}\n`));
   await beat();
   const timer = setInterval(beat, 15000);
@@ -38,21 +47,39 @@ export async function serveMcp(config) {
     } catch (error) { respond({ jsonrpc: '2.0', id: rpc.id, error: { code: -32000, message: redact(error, config) } }); }
     finally { pending.delete(rpc.id); }
   }
-  let buffered = '';
-  try {
-    for await (const chunk of process.stdin) {
-      buffered += chunk.toString();
-      let boundary;
-      while ((boundary = buffered.indexOf('\n')) !== -1) {
-        const line = buffered.slice(0, boundary).replace(/\r$/, '');
-        buffered = buffered.slice(boundary + 1);
-        if (!line) continue;
-        if (line.length > 262144) { respond({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request exceeds the limit' } }); continue; }
-        const task = handle(line); tasks.add(task); task.finally(() => tasks.delete(task));
+  const decoder = new StringDecoder('utf8');
+  let buffered = '', bufferedBytes = 0, discarding = false;
+  const dispatch = line => {
+    if (!line) return;
+    const task = handle(line);
+    tasks.add(task);
+    task.finally(() => tasks.delete(task));
+  };
+  const consume = text => {
+    let offset = 0;
+    do {
+      const boundary = text.indexOf('\n', offset);
+      const fragment = text.slice(offset, boundary === -1 ? text.length : boundary);
+      if (!discarding) {
+        bufferedBytes += Buffer.byteLength(fragment, 'utf8');
+        // A CR before LF is framing, not part of the JSON request.
+        const trailingCr = fragment ? fragment.endsWith('\r') : buffered.endsWith('\r');
+        if (bufferedBytes - (trailingCr ? 1 : 0) > MAX_STDIO_REQUEST_BYTES) {
+          respond({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request exceeds the limit' } });
+          buffered = '';
+          discarding = true;
+        } else buffered += fragment;
       }
-      if (buffered.length > 262144) throw Error('STDIO request exceeds the limit');
-    }
-    if (buffered.trim()) { const task = handle(buffered); tasks.add(task); }
+      if (boundary === -1) break;
+      if (!discarding) dispatch(buffered.replace(/\r$/, ''));
+      buffered = ''; bufferedBytes = 0; discarding = false;
+      offset = boundary + 1;
+    } while (offset < text.length);
+  };
+  try {
+    for await (const chunk of process.stdin) consume(decoder.write(chunk));
+    consume(decoder.end());
+    if (!discarding && buffered.trim()) dispatch(buffered.replace(/\r$/, ''));
     await Promise.all(tasks);
   } finally { clearInterval(timer); for (const controller of pending.values()) controller.abort(); }
 }

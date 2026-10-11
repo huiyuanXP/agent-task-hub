@@ -172,6 +172,9 @@ try {
   const openPanel = async (pending = true) => {
     current = alice; await refresh(); await identity('Alice Member').waitFor();
     await page.getByRole('button', { name: /Ticket 看板/ }).click();
+    const summary = page.getByText('固定 Docker 操作与独立执行授权', {exact:true});
+    const section = page.locator('details').filter({has:summary});
+    if (await section.getAttribute('open') === null) await summary.click();
     await panel.getByText(pending ? 'pending' : 'cancelled', { exact: pending }).waitFor();
     await page.waitForLoadState('networkidle');
   };

@@ -5,6 +5,8 @@ export interface OperationDefinition { operationId: string; label: string; image
 export interface AuthorizationContext extends RunContext {
   /** Server-only owner capability. Never derived from a worker name or lease. */
   grantAuthority?: 'owner';
+  /** Trusted adapter binding for a Run-specific principal; never read from payloads. */
+  executionRunId?: string;
   /** Trusted clock/registry injection; adapters never read these from payloads. */
   now?: number;
   registry?: readonly OperationDefinition[];

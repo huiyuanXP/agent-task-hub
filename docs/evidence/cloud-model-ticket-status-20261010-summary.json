@@ -1,0 +1,85 @@
+{
+  "date_utc": "2026-10-10",
+  "artifact_commit": "72520d4809550d5514ef3caa1e1f3fa9b62e4a17",
+  "artifact_url": "https://github.com/huiyuanXP/agent-task-hub/tree/72520d4809550d5514ef3caa1e1f3fa9b62e4a17",
+  "source_commit": "c0ba6c85b6a53cd6ea8d7754a6cd1e7510ddef50",
+  "manifest_hash_checks": 46,
+  "original_source_checks": 45,
+  "node": "v24.19.0",
+  "model": "gpt-6.1-sol",
+  "reasoning": "low",
+  "classification": "Real native model-directed local MCP protocol acceptance using actual project stdio and loopback HTTP implementations. Fixture-only initialization of synthetic account/enrollment/database. Not CLI executor, VM network or web UI test.",
+  "verdict": "PASS for supported model-to-original-ticket status/evidence loop",
+  "protocol_calls": 27,
+  "independent_assertions": {
+    "call_count_27": true, "exit_zero": true, "three_semantic409": true,
+    "sum_final_state": true, "sum_goal_scope_preserved": true, "sum_evidence_saved": true,
+    "sort_final_state": true, "sort_goal_scope_preserved": true, "sort_evidence_saved": true,
+    "missing_final_state": true, "missing_goal_scope_preserved": true, "missing_evidence_saved": true,
+    "sum_correct": true, "sort_correct": true, "reported_checks": true,
+    "status_tool_present": true, "four_ticket_records": true,
+    "exactly_four_successful_update_histories": true, "cleanup_verified": true
+  },
+  "actual_ids": {
+    "sum": {"ticket_id": "ticket_b5f3bec920fe4dc7eeec4e44ce02c830bc76a402c7a1171c89556170e8c2e6fb", "id": "ticket_b5f3bec920fe4dc7eeec4e44ce02c830bc76a402c7a1171c89556170e8c2e6fb", "revision": 1},
+    "sort": {"ticket_id": "ticket_a84f5be0ef26da5af1afbdaf06b6224ac7fc375dda2f3e4b1d4d6488e915d59e", "id": "ticket_a84f5be0ef26da5af1afbdaf06b6224ac7fc375dda2f3e4b1d4d6488e915d59e", "revision": 1},
+    "missing": {"ticket_id": "ticket_c682cd664adf8ed4e91f985abe08d53fd910f2c46eb1752fdef308974663057d", "id": "ticket_c682cd664adf8ed4e91f985abe08d53fd910f2c46eb1752fdef308974663057d", "revision": 1}
+  },
+  "computed_results": {"sum": 42, "sort": [1,3,5,5], "missing": "delivery_date absent; clarification required"},
+  "final_ticket_records": [
+    {"id": "ticket_b1f6dec0ea3ebbf0dd2de97548a6011e24fd18cb13de82288d140ccfb4d741a4", "kind": "ticket", "revision": 1, "title": "Synthetic model read and write acceptance", "status": "todo", "evidence": "", "goal": "Read this synthetic Ticket, compute a result, then update its status and append caller-reported evidence using its current revision.", "scope": "Only this temporary project; no real accounts, execution or credentials."},
+    {"id": "ticket_b5f3bec920fe4dc7eeec4e44ce02c830bc76a402c7a1171c89556170e8c2e6fb", "kind": "ticket", "revision": 3, "title": "SYNTHETIC sum native model test", "status": "done", "evidence": "Caller-reported evidence: real native model calculation, not an executor Run. I read the original ticket and calculated 8 + 13 = 21, then 21 + 21 = 42. Result: 42.\n\nCaller-reported native model validation: I checked that the original sum goal and synthetic-only scope remain unchanged, the saved result is 42, and get_ticket reports no Runs.", "goal": "Compute the sum of [8,13,21].", "scope": "Temporary synthetic model reasoning only; no subprocess, Run, executor, VM, SSH, production tools, credentials or execution authority."},
+    {"id": "ticket_a84f5be0ef26da5af1afbdaf06b6224ac7fc375dda2f3e4b1d4d6488e915d59e", "kind": "ticket", "revision": 2, "title": "SYNTHETIC sort native model test", "status": "done", "evidence": "Caller-reported evidence: real native model calculation, not an executor Run. I read the original ticket and ordered its four values ascending: [1,3,5,5]. Both occurrences of 5 are preserved.", "goal": "Sort [5,1,5,3] in ascending order.", "scope": "Temporary synthetic model reasoning only; no subprocess, Run, executor, VM, SSH, production tools, credentials or execution authority."},
+    {"id": "ticket_c682cd664adf8ed4e91f985abe08d53fd910f2c46eb1752fdef308974663057d", "kind": "ticket", "revision": 2, "title": "SYNTHETIC missing native model test", "status": "waiting", "evidence": "Caller-reported evidence: real native model reasoning, not an executor Run. I read the original ticket; required delivery_date is absent. Clarification needed: What delivery_date should the schedule use? No date was invented and no schedule completion is claimed.", "goal": "Produce a delivery schedule that requires delivery_date; delivery_date is absent.", "scope": "Temporary synthetic model reasoning only; no subprocess, Run, executor, VM, SSH, production tools, credentials or execution authority."}
+  ],
+  "checks": {
+    "sum": {"status": true, "revision": true, "evidence": true, "goalUnchanged": true, "scopeUnchanged": true, "noRuns": true},
+    "sort": {"status": true, "revision": true, "evidence": true, "goalUnchanged": true, "scopeUnchanged": true, "noRuns": true},
+    "missing": {"status": true, "revision": true, "evidence": true, "goalUnchanged": true, "scopeUnchanged": true, "noRuns": true, "waitingReason": true},
+    "exactRetryNoChange": true, "rejectionsUnchanged": true, "stale409": true, "reusedChanged409": true,
+    "casSecond409": true, "casFirstRevision3": true, "originalReplayReturnsRevision2": true,
+    "replayPreservesLaterState": true, "seedUnchanged": true
+  },
+  "status_tool_schema": {
+    "type": "object", "additionalProperties": false,
+    "properties": {
+      "ticket_id": {"type": "string", "minLength": 1, "maxLength": 200},
+      "expected_revision": {"type": "integer", "minimum": 1},
+      "request_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,80}$"},
+      "status": {"type": "string", "enum": ["todo","running","waiting","done","error"]},
+      "evidence": {"type": "string", "maxLength": 12000, "description": "Append evidence; combined saved evidence must fit 12000 UTF-8 bytes. Empty is allowed except when done has no existing evidence."},
+      "waiting_reason": {"type": "string", "enum": ["clarification","approval","review","external","recovery"]}
+    },
+    "required": ["ticket_id","expected_revision","request_id","status","evidence"]
+  },
+  "semantic_rejections": ["fresh request with stale revision:409","changed input reusing request_id:409","second sequential CAS update from same revision:409"],
+  "limitations": {
+    "cli_startup": "Previously blocked read-only in-process app-server; not retried or permissions changed.",
+    "vm1_network_auth": "Not tested; local synthetic enrollment is not remote authentication validation.",
+    "web_display": "Not tested in this cloud acceptance.",
+    "executor": "No execution scope/tools/Run; done is truthful model reasoning result, not executor or owner acceptance.",
+    "concurrent_cas": "Sequential same-revision competition tested; truly simultaneous requests not tested.",
+    "other_guards": "Expiry/revocation/runtime occupancy/UTF8 maximum cases source-reviewed, not independently exercised by this model test."
+  },
+  "isolation": {
+    "temporary_synthetic_db": true, "capabilities": ["read","submit","plan"],
+    "credential_and_node_preload_env_scrubbed": true, "no_vm_or_production_access": true,
+    "no_persistent_mcp_install_or_security_grants": true, "normal_eof_exit": 0,
+    "temporary_db_removed": true,
+    "cleanup_caveat": "SIGKILL/crash cleanup not guaranteed by fixture; source isolation is not OS isolation."
+  },
+  "closeout": {
+    "code": "verified-current immutable artifact/source", "runtime": "verified-current synthetic local protocol only",
+    "documentation": "sanitized evidence ready; project owner commit/push pending",
+    "rules": "unchanged; allocation and scope maintained", "memory": "out-of-scope",
+    "workspace": "source checkout unchanged; temp DB removed; evidence retained"
+  },
+  "sha256": {
+    "native-model-result.json": "d5afbaade9c0dc01f167a6fe4a9e7836ed0a1160c577b46c464ccb1aa0f4952f",
+    "assertions.json": "0e827e563a2d865bc918c25e558d94e28445b7f2d77b342c23c4b91d0a2cdc7e",
+    "model-protocol-transcript.json": "61d152308d305e666c02b724f707ffab75f4a94333238708451d906524bc8191",
+    "model-fixture/f9925875-daad-48c6-92d5-587d4ff341c2.json": "5b3fcf3cf57a68cd1de5744da2110de3669e26e0105ded83f69759ae39ae0cdc",
+    "broker.py": "66f28f100ced5b07db485ff90baf161aa272dee30e272ef2a4d1ca144a27aeb1",
+    "rpc.py": "41c80b8f2a5ec9b8cdb281efd3ca8224ded3516a7c85f84718649a2652cb3004"
+  }
+}

@@ -19,8 +19,12 @@ import {
 } from "../../lib/events";
 import { dispatchExecutionTool, executionTools } from "../../lib/execution/mcp.mts";
 import { dispatchTaskReadTool, taskReadTools } from "../../lib/task-reads/mcp.mts";
+import { boundedMCPResponse as boundedResponse } from '../../lib/task-reads/bounds.mts';
+import { readBody } from '../../lib/execution/http.mts';
 import { ExecutionError } from "../../lib/execution/errors.mts";
 import { dispatchPlanningTool, planningTools as tools, object, str } from '../../lib/connectors/planning.mts';
+const boundedMCPResponse = (value: unknown, init: ResponseInit = {}) =>
+  boundedResponse(value, init.status ?? 200, { 'Cache-Control': 'no-store', ...Object.fromEntries(new Headers(init.headers)) });
 const eventDef = {
   name: EVENT,
   description:
@@ -54,8 +58,8 @@ export async function POST(req: Request) {
   let id: string | number | null = null;
   try {
     if (req.headers.has("origin") && req.headers.get("origin") !== configuredOrigin())
-      return Response.json({ error: "Invalid request origin" }, { status: 403 });
-    const rpc = (await req.json()) as RpcRequest;
+      return boundedMCPResponse({ error: "Invalid request origin" }, { status: 403 });
+    const rpc = (await readBody(req, 200000)) as RpcRequest;
     id = rpc.id ?? null;
     const p = rpc.params || {},
       method = rpc.method;
@@ -68,7 +72,7 @@ export async function POST(req: Request) {
       }),
     );
     const respond = (result: Record<string, unknown>) =>
-      Response.json(
+      boundedMCPResponse(
         { jsonrpc: "2.0", id, result: { resultType: "complete", ...result } },
         { headers: { "Cache-Control": "no-store" } },
       );
@@ -102,7 +106,7 @@ export async function POST(req: Request) {
       }),
     );
     if (!user)
-      return Response.json(
+      return boundedMCPResponse(
         {
           jsonrpc: "2.0",
           id,
@@ -194,7 +198,7 @@ export async function POST(req: Request) {
                   : "unknown",
             }),
           );
-          return Response.json({
+          return boundedMCPResponse({
             jsonrpc: "2.0",
             id,
             error: {
@@ -229,7 +233,7 @@ export async function POST(req: Request) {
       });
     }
     if (method !== "tools/call")
-      return Response.json({
+      return boundedMCPResponse({
         jsonrpc: "2.0",
         id,
         error: { code: -32601, message: "Method not found" },
@@ -251,7 +255,7 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     if (!(e instanceof ExecutionError)) console.error(e instanceof Error ? e.message : "MCP error");
-    return Response.json(
+    return boundedMCPResponse(
       {
         jsonrpc: "2.0",
         id,

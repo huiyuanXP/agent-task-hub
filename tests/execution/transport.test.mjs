@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sign, verify, KeyObject } from 'node:crypto';
+import { readProxyBody } from './fixtures/transport-proxy.mjs';
 const api = await import('../../lib/execution/transport.mts').catch(() => ({}));
 async function pair(keyId) { const k = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign','verify']); return { keyId, privateKey: k.privateKey, publicKey: k.publicKey }; }
 test('transport uses interoperable raw P256 and binds direction, nonce, method, path, audience and exact bytes', async () => {
@@ -29,4 +30,22 @@ test('bounded replay admission refuses duplicates and saturation without droppin
   assert.equal(replay.accept('one', 2000, 1000), true); assert.equal(replay.accept('one', 2000, 1000), false);
   assert.equal(replay.accept('two', 2000, 1000), true); assert.equal(replay.accept('three', 2000, 1000), false);
   assert.equal(replay.accept('one', 2000, 1000), false); assert.equal(replay.accept('three', 4000, 3000), true);
+});
+
+test('fixture proxy preserves signed Unicode permits across arbitrary byte chunks', async () => {
+  const control=await pair('control');
+  const body=api.canonical({permit:{ticketBody:JSON.stringify({title:'Actual backend Ticket',payload:'😀'.repeat(79900)})}});
+  const bytes=Buffer.from(body);
+  const emoji=bytes.indexOf(Buffer.from('😀'));
+  // Deliberately split inside a four-byte code point; real sockets may split anywhere.
+  const chunks=[bytes.subarray(0,emoji+1),bytes.subarray(emoji+1,65537),bytes.subarray(65537)];
+  const signed=await api.signRequest(control,{direction:'control-to-runner',audience:'runner',method:'POST',path:'/start',body});
+  const trust={keyId:control.keyId,key:control.publicKey};
+  const binding={direction:'control-to-runner',audience:'runner',method:'POST',path:'/start'};
+  const legacy=chunks.map(chunk=>chunk.toString()).join('');
+  assert.notEqual(Buffer.byteLength(legacy),bytes.length);
+  assert.equal(await api.verifyRequest(signed,trust,{...binding,body:legacy}),false);
+  const forwarded=await readProxyBody((async function*(){yield* chunks;})());
+  assert.deepEqual(forwarded,bytes);
+  assert.equal(await api.verifyRequest(signed,trust,{...binding,body:forwarded.toString('utf8')}),true);
 });

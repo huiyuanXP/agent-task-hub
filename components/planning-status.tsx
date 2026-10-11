@@ -41,7 +41,7 @@ export function planningControls(job: PlanningView, now: number) {
 
 const deadline = (value: number) => new Date(value).toLocaleString("zh-CN");
 
-export function PlanningStatus({ job, now }: { job: PlanningView; now: number }) {
+export function PlanningStatus({ job, now, compact = false }: { job: PlanningView; now: number; compact?: boolean }) {
   const { active, expired } = planningControls(job, now);
   const reasons = [...new Set([
     job.recovery_reason,
@@ -64,26 +64,19 @@ export function PlanningStatus({ job, now }: { job: PlanningView; now: number })
                 : job.delivery === "retrying"
                   ? "投递暂时失败 · 等待自动重试"
                   : "规划已排队";
+  const timing = <>
+    {active && job.lease_expires != null && <div>租约到期：{deadline(job.lease_expires)} · 剩余 {Math.ceil((job.lease_expires - now) / 1000)} 秒</div>}
+    {job.next_retry_at != null && <div>下次投递：{deadline(job.next_retry_at)}</div>}
+    {job.delivery === "accepted" && job.wake_deadline != null && <div>等待领取至：{deadline(job.wake_deadline)}</div>}
+  </>;
   return (
     <div className="planning-status" aria-live="polite">
       <div>{text}</div>
       {job.planner_error && <div>Agent 错误：{job.planner_error}</div>}
       {(job.planner_retry_at ?? 0) > now && <div>Agent 重试冷却：剩余 {Math.ceil((job.planner_retry_at! - now) / 1000)} 秒</div>}
-      {active && job.lease_expires != null && (
-        <div>
-          租约到期：{deadline(job.lease_expires)} · 剩余 {Math.ceil((job.lease_expires - now) / 1000)} 秒
-        </div>
-      )}
-      {job.next_retry_at != null && (
-        <div>下次投递：{deadline(job.next_retry_at)}</div>
-      )}
-      {job.delivery === "accepted" && job.wake_deadline != null && (
-        <div>等待领取至：{deadline(job.wake_deadline)}</div>
-      )}
-      {(job.retry_after ?? 0) > now && (
-        <div>重试冷却：剩余 {Math.ceil((job.retry_after! - now) / 1000)} 秒</div>
-      )}
+      {(job.retry_after ?? 0) > now && <div>重试冷却：剩余 {Math.ceil((job.retry_after! - now) / 1000)} 秒</div>}
       {!!reasons.length && <div>原因：{reasons.join(" · ")}</div>}
+      {compact ? <details className="origin planning-diagnostics"><summary>规划详情</summary>{timing}<pre className="preserve">{JSON.stringify({ generation: job.generation, recoveries: job.recoveries, attempt_total: job.attempt_total, targets: job.targets }, null, 2)}</pre></details> : timing}
     </div>
   );
 }

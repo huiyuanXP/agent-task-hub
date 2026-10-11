@@ -4,6 +4,7 @@ import type { Row } from "../../lib/types";
 import type { Run } from "../../lib/execution/types.mts";
 import type { Authorization, OperationDescriptor, PrepareExecutionInput, ResourceBudget } from "../../lib/execution/authorization-types.mts";
 
+import { ticketResponse, TicketRequestError } from "../../lib/tickets/request.mts";
 import type { BackendAttestation } from "../../lib/execution/attestations.mts";
 type Backend = { phase: string; receipts: BackendAttestation[] };
 type Catalog = { operations: OperationDescriptor[]; ceilings: ResourceBudget };
@@ -11,14 +12,17 @@ const active = (run: Run | null) => !!run && ["queued", "running", "waiting"].in
 async function api<T>(pendingResponse: Promise<Response>): Promise<T> {
   const response = await pendingResponse;
   const result = await response.json() as T & { error?: string };
-  if (!response.ok) throw Error(result.error || "授权请求失败");
+  if (!response.ok) throw new TicketRequestError(response.status, result.error || "授权请求失败");
   return result as T;
 }
 /** A dedicated owner decision flow; planning prose is never converted to authority. */
-export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { tickets: Row[]; onAuthenticationDenied: () => void }) {
-  const [selectedId, setSelectedId] = useState("");
-  const ticket = tickets.find(t => t.id === selectedId) ?? tickets[0];
-  const ticketId = ticket?.id, revision = ticket?.revision;
+export function AuthorizationPanel({ tickets, ticketId: boundId, revision: boundRevision, blockedReason, onAuthenticationDenied }: { tickets: Row[]; ticketId?: string; revision?: number; blockedReason?:string; onAuthenticationDenied: () => void }) {
+  const [selected, setSelected] = useState(() => tickets[0] ? {id:tickets[0].id,revision:tickets[0].revision} : null);
+  const ticketId = boundId ?? selected?.id, revision = boundRevision ?? selected?.revision;
+  const ticket = tickets.find(t => t.id === ticketId && t.revision === revision);
+  const bindingAvailable = !!ticket;
+  const [historicalRuns, setHistoricalRuns] = useState<Run[]>([]);
+  const [conflict,setConflict]=useState(false);
   const [operationId, setOperationId] = useState("");
   const [backend, setBackend] = useState<Backend | null>(null);
   const [connection, setConnection] = useState("正在检查执行后端");
@@ -33,30 +37,25 @@ export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { ticket
   const selectedOperation = (active(run) ? authorization?.operations[0] : undefined) ?? catalog?.operations.find(o => o.operationId === operationId) ?? catalog?.operations[0];
   const storageKey = `execution-request:${ticketId}:v${revision}:${selectedOperation?.operationId ?? ""}`;
   const request = useCallback(async (url: string, isCurrent: () => boolean, body?: unknown) => {
-    const response = await fetch(url, { cache: "no-store", ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
-    if (!isCurrent()) throw Error("请求已失效");
-    // Inspect every response before JSON parsing or a sibling request can delay it.
-    if (response.status === 401 || response.status === 403) {
-      ++lifecycle.current;
-      ++sequence.current;
-      setCatalog(null); setRun(null); setAuthorization(null); setBackend(null); setConnected(false); setConnection("登录已失效");
+    return ticketResponse(url, { body, isCurrent, onAuthenticationDenied: () => {
+      ++lifecycle.current; ++sequence.current;
+      setCatalog(null); setRun(null); setAuthorization(null); setBackend(null); setHistoricalRuns([]); setConnected(false); setConnection("登录已失效");
+      setOperationId(""); setBudget({timeoutMs:30000,memoryMb:256,cpus:1,pids:64}); setExpiryMinutes(10);
       onAuthenticationDenied();
-      throw Error("登录已失效或无权访问");
-    }
-    return response;
+    } });
   }, [onAuthenticationDenied]);
-  const refresh = useCallback(async () => {
-    if (!ticketId || !revision) return;
+  const refresh = useCallback(async (preserveError=false) => {
+    if (!ticketId || !revision || !bindingAvailable) return;
     const current = ++sequence.current, generation = lifecycle.current;
     const isCurrent = () => sequence.current === current && lifecycle.current === generation;
     try {
       const [nextCatalog, listed, health] = await Promise.all([
         api<Catalog>(request(`/api/authorization?ticketId=${encodeURIComponent(ticketId)}&expectedRevision=${revision}`, isCurrent)),
-        api<{ runs: Run[] }>(request(`/api/execution?ticketId=${encodeURIComponent(ticketId)}`, isCurrent)),
+        Promise.all(["", "queued", "running", "waiting"].map(state => api<{runs:Run[]}>(request(`/api/execution?ticketId=${encodeURIComponent(ticketId)}&limit=100${state ? "&state="+state : ""}`,isCurrent)))).then(pages => ({runs:[...new Map(pages.flatMap(page=>page.runs).map(run=>[run.id,run])).values()]})),
         request("/api/execution/dispatch", isCurrent),
       ]);
       if (!isCurrent()) return;
-      let latest = listed.runs.find(r => active(r)) ?? listed.runs[0] ?? null;
+      let latest = listed.runs.find(r => active(r)) ?? listed.runs.find(r => r.ticketRevision === revision) ?? null;
       let nextAuthorization: Authorization | null = null;
       let nextBackend: Backend | null = null;
       const healthy = health.ok;
@@ -72,27 +71,27 @@ export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { ticket
         else if (response.status !== 404) throw Error("无法读取授权状态");
       }
       if (isCurrent()) {
-        setCatalog(nextCatalog); setRun(latest); setAuthorization(nextAuthorization); setBackend(nextBackend);
+        setHistoricalRuns(listed.runs.filter(r=>r.ticketRevision !== revision)); setCatalog(nextCatalog); setRun(latest); setAuthorization(nextAuthorization); setBackend(nextBackend);
         setConnected(healthy); setConnection(healthy ? "执行后端已连接" : "执行后端暂不可用或未配置（503）");
         nextAttempt.current = Math.max(0, ...listed.runs.map(r => r.attempt)) + 1;
-        setError(""); setLoading(false);
+        if(!preserveError){setError("");setConflict(false);} setLoading(false);
       }
     } catch (e) { if (isCurrent()) { setError(e instanceof Error ? e.message : "授权状态不可用"); setLoading(false); } }
-  }, [ticketId, revision, request]);
+  }, [ticketId, revision, bindingAvailable, request, setError, setLoading]);
   useEffect(() => {
     const pendingSequence = sequence, generation = lifecycle;
     ++generation.current;
-    const startup = window.setTimeout(() => { setBusy(false); setLoading(true); setCatalog(null); setRun(null); setAuthorization(null); setBackend(null); setConnected(false); setConnection("正在检查执行后端"); void refresh(); }, 0);
-    const interval = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 5000);
+    const startup = window.setTimeout(() => { setBusy(false); setLoading(true); setCatalog(null); setRun(null); setAuthorization(null); setBackend(null); setHistoricalRuns([]); setConnected(false); setConnection("正在检查执行后端"); void refresh(); }, 0);
+    const interval = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(true); }, 5000);
     return () => { ++pendingSequence.current; ++generation.current; window.clearTimeout(startup); window.clearInterval(interval); };
   }, [refresh]);
   async function write(action: (isCurrent: () => boolean) => Promise<void>) {
     const generation = lifecycle.current;
     const isCurrent = () => lifecycle.current === generation;
     ++sequence.current;
-    setBusy(true); setError("");
+    setBusy(true); setError("");setConflict(false);
     try { await action(isCurrent); if (isCurrent()) await refresh(); }
-    catch (e) { if (isCurrent()) setError(e instanceof Error ? e.message : "授权请求失败；可用相同请求重试"); }
+    catch (e) { if (isCurrent()) { const message=e instanceof Error ? e.message : "授权请求失败；可用相同请求重试"; if(e instanceof TicketRequestError && e.status===409){await refresh(true);if(isCurrent())setConflict(true);} if(isCurrent())setError(message+"；输入已保留"); } }
     finally { if (isCurrent()) setBusy(false); }
   }
   function requestAuthorization() {
@@ -150,13 +149,15 @@ export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { ticket
   }
   const result = backend?.receipts.find(r => r.claims.purpose === "result")?.claims;
   if (!tickets.length) return null;
+  if (!ticket) return <div><p className="form-error">选中的 Ticket 已消失或修订已改变，请明确重新选择。</p>{!boundId&&<label>授权 Ticket<select aria-label="授权 Ticket" value="" onChange={e=>{const chosen=tickets.find(t=>t.id===e.target.value);setSelected(chosen?{id:chosen.id,revision:chosen.revision}:null);}}><option value="">请选择当前 Ticket</option>{tickets.map(t=><option key={t.id} value={t.id}>{t.title} · v{t.revision}</option>)}</select></label>}</div>;
+  const currentRun = !run || run.ticketRevision === revision;
   const requested = active(run), pending = authorization?.effectiveStatus === "pending";
   return (
     <section className="idea-card" role="region" aria-label="执行授权">
       <h2>执行授权</h2>
       <p role="status">{connection}</p>
       <p>选择已登记的操作，单独批准固定 Ticket 版本的执行。申请和批准均不会启动进程。</p>
-      <label>授权 Ticket <select aria-label="授权 Ticket" value={ticketId ?? ""} disabled={busy} onChange={e => setSelectedId(e.target.value)}>
+      <label>授权 Ticket <select aria-label="授权 Ticket" value={ticketId ?? ""} disabled={busy || !!boundId} onChange={e => {const chosen=tickets.find(t=>t.id===e.target.value);setSelected(chosen?{id:chosen.id,revision:chosen.revision}:null);}}>
         {tickets.map(t => <option value={t.id} key={t.id}>{t.title} · v{t.revision}</option>)}
       </select></label>
       {catalog && <>
@@ -170,7 +171,7 @@ export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { ticket
         ))}
         <label>最晚开始（分钟）<input type="number" aria-label="最晚开始（分钟）" min={1} max={1440} value={expiryMinutes} disabled={busy} onChange={e => setExpiryMinutes(Number(e.target.value))} /></label>
       </div>}
-      {run && <p>Run {run.id} · v{run.version} · {run.state} · Ticket v{run.ticketRevision}</p>}
+      {run && <p>{currentRun ? "当前修订" : "历史修订（仍占用 Ticket）"} · Run {run.id} · v{run.version} · {run.state} · Ticket v{run.ticketRevision}</p>}
       {backend && <p>后端状态：{backend.phase} · {backend.receipts.some(r => r.claims.purpose === "stop") ? "已确认物理停止" : "尚未确认物理停止"}</p>}
       {result && <div aria-label="实际执行结果"><p>实际结果：{result.status} · 退出码 {result.exitCode ?? "未知"}</p>
         {(["stdout", "stderr"] as const).map(kind => result[kind] && <button key={kind} type="button" disabled={busy} onClick={() => download(kind)}>下载 {kind}（{result[kind]!.bytes} 字节{result[kind]!.truncated ? "，已截断" : ""}）</button>)}
@@ -184,13 +185,16 @@ export function AuthorizationPanel({ tickets, onAuthenticationDenied }: { ticket
       {requested && <p>旧 Run 仍占用此 Ticket。拒绝、撤销或过期后，可取消 Run 再申请；取消不会自动启动其他执行；实际停止确认前仍保留物理执行占用。</p>}
       <div className="card-actions" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
         {!requested && <button type="button" disabled={busy || loading} onClick={() => { sessionStorage.removeItem(storageKey); setError(""); }}>重新设置申请</button>}
-        {!requested && <button className="primary" type="button" disabled={busy || loading || !catalog} onClick={requestAuthorization}>请求执行授权</button>}
-        {authorization?.effectiveStatus === "approved" && requested && <button type="button" disabled={busy || !connected} onClick={startRun}>启动已批准的执行</button>}
-        {pending && requested && <><button type="button" disabled={busy} onClick={() => decide("approved")}>批准授权</button><button type="button" disabled={busy} onClick={() => decide("rejected")}>拒绝授权</button></>}
+        {!requested && <button className="primary" type="button" disabled={busy || loading || !catalog || ticket.status === "done" || !!blockedReason || conflict} onClick={requestAuthorization}>请求执行授权</button>}
+        {currentRun && authorization?.effectiveStatus === "approved" && requested && <button type="button" disabled={busy || !connected} onClick={startRun}>启动已批准的执行</button>}
+        {currentRun && pending && requested && <><button type="button" disabled={busy} onClick={() => decide("approved")}>批准授权</button><button type="button" disabled={busy} onClick={() => decide("rejected")}>拒绝授权</button></>}
         {authorization && ["pending", "approved"].includes(authorization.status) && <button type="button" disabled={busy} onClick={() => decide("revoked")}>撤销授权</button>}
         {requested && <button type="button" disabled={busy} onClick={cancelRun}>取消 Run，允许重新申请</button>}
         <button type="button" disabled={busy} onClick={() => void refresh()}>刷新授权状态</button>
       </div>
+      {conflict && <p className="form-error">关联状态已刷新，请刷新 Ticket 并重新确认；输入已保留。</p>}
+      {blockedReason && <p className="form-error">{blockedReason}</p>}
+      {historicalRuns.length>0 && <details><summary>历史修订 Docker 记录（{historicalRuns.length}）</summary>{historicalRuns.map(old=><p key={old.id}>Run {old.id} · Ticket v{old.ticketRevision} · {old.state}（固定操作结果不代表开发验收）</p>)}</details>}
       {error && <p role="alert" className="form-error">{error}</p>}
     </section>
   );

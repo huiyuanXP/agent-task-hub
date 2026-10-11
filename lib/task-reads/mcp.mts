@@ -1,3 +1,4 @@
+import { assertTaskResultBytes, nestedPageBudget, type TaskReadOptions } from './bounds.mts';
 import { boundedId, ExecutionError } from '../execution/errors.mts';
 import type { ExecutionDatabase } from '../execution/types.mts';
 import { getPlan, getTicket, listRecords } from './queries.mts';
@@ -18,21 +19,28 @@ export const taskReadTools = [
   { name: 'get_plan', description: `Read an owned Plan, original Idea revision and first 20 linked Tickets; continue with list_tickets. ${boundary}`, inputSchema: readObjectSchema({ plan_id: id }, ['plan_id']), annotations: readAnnotations },
 ];
 /** The route supplies its verified owner; raw arguments must reach this validator unchanged. */
-export async function dispatchTaskReadTool(db: ExecutionDatabase, owner: string, name: string, args: unknown, registry: TrustedRegistry, project?: string): Promise<unknown> {
+export async function dispatchTaskReadTool(db: ExecutionDatabase, owner: string, name: string, args: unknown, registry: TrustedRegistry, options: TaskReadOptions = {}): Promise<unknown> {
+  const { project } = options;
   if (!taskReadTools.some(tool => tool.name === name)) return undefined;
   try {
     boundedId(owner);
     if (name === 'list_tickets' || name === 'list_plans') {
       const input = readListInput(name === 'list_tickets' ? 'tickets' : 'plans', args);
       if (project !== undefined && input.filters.project !== undefined && input.filters.project !== project) throw new ExecutionError('AUTHORIZATION_DENIED', 'Connector project denied', 403);
-      return await listRecords(db, owner, name === 'list_tickets' ? 'ticket' : 'plan', input, project);
+      return await listRecords(db, owner, name === 'list_tickets' ? 'ticket' : 'plan', input, options);
     }
-    if (name === 'list_ticket_runs') return await listTicketRuns(db, owner, readListInput('ticket_runs', args), registry, project);
+    if (name === 'list_ticket_runs') return await listTicketRuns(db, owner, readListInput('ticket_runs', args), registry, options);
     if (name === 'get_ticket') {
       const id = readRootId(args, 'ticket_id');
-      return { ...await getTicket(db, owner, id, project), runs: await listTicketRuns(db, owner, { filters: { ticket_id: id }, limit: 20 }, registry, project) };
+      const base = await getTicket(db, owner, id, project);
+      const result = { ...base, runs: await listTicketRuns(db, owner, { filters: { ticket_id: id }, limit: 20 }, registry,
+        { project, byteBudget: nestedPageBudget(base, 'runs', options.byteBudget) }) };
+      assertTaskResultBytes(result, options.byteBudget);
+      return result;
     }
-    return await getPlan(db, owner, readRootId(args, 'plan_id'), project);
+    const result = await getPlan(db, owner, readRootId(args, 'plan_id'), options);
+    assertTaskResultBytes(result, options.byteBudget);
+    return result;
   } catch (error) {
     if (error instanceof ExecutionError) throw error;
     throw new ExecutionError('STORAGE_UNAVAILABLE', 'Task storage unavailable', 503);

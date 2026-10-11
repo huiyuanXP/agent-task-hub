@@ -46,6 +46,8 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:local
       - run: npm run test:execution:domain
+      - run: npm run test:execution:workers
+      - run: npm run test:execution:consumer
       - name: Keep shared test artifacts owned by the ordinary CI user
         run: |
           mkdir -p test-results
@@ -62,12 +64,21 @@ jobs:
           sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin \
             PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" "$runner_node" \
             --experimental-strip-types tests/execution/backend-native.mjs
+      - name: Verify Run Worker consumer against the actual signed Docker backend
+        run: |
+          runner_node="$(command -v node)"
+          sudo -- env -i PATH=/usr/local/bin:/usr/bin:/bin "$runner_node" \
+            --experimental-strip-types tests/execution/consumer-backend-native.mjs
       - run: npm run test:browser-policy
       - run: npm run test:auth
       - name: Verify local authentication in the already-built native server
         run: node --experimental-strip-types tests/auth/native-api.mjs
       - name: Verify readonly Ticket, Plan, manual and execution Run MCP queries
         run: npm run test:mcp:task-reads
+      - name: Verify revision-guarded MCP status writes and browser readback
+        run: npm run test:ticket-status:native
+        env:
+          TICKET_STATUS_EVIDENCE_DIR: test-results/ticket-status
       - run: npm run test:planning:revisions
       - run: npm run test:execution:configuration
       - run: npm run test:planning:recovery
