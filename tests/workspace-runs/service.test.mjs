@@ -161,7 +161,7 @@ test('dependent development waits until same-project Plan logical dependency is 
 });
 
 test('planner prerequisite sentences allow Chinese none phrases and fulfilled logical key lists',async t=>{
- for(const dependencies of ['无。','无依赖。','none.','T1。','T1、T2。','T3、T4、T5。','T1、T2.'])await t.test(dependencies,async t=>{
+ for(const dependencies of ['无。','无依赖。','无前置依赖','无前置依赖。','暂无前置任务。','无需依赖','No dependencies.','none.','T1。','T1、T2。','T3、T4、T5。','T1、T2.'])await t.test(dependencies,async t=>{
   const f=await fixture(t);await f.db.prepare("UPDATE records SET body=json_set(body,'$.dependencies',?,'$.planId','plan') WHERE id='ticket'").bind(dependencies).run();
   for(const key of ['T1','T2','T3','T4','T5'])await f.ticket(`dependency-${key}`,{logicalKey:key,planId:'plan',status:'done'});
   const {run,job}=await f.running();assert.equal(job.id,run.id);assert.equal((await getWorkspaceRun(f.db,'alice',run.id)).state,'running');

@@ -129,9 +129,12 @@ function principal(input:ConnectorPrincipal) {
  if(!input.capabilities.includes('execute'))throw new WorkspaceError(403,'Connector execution capability required','CAPABILITY_DENIED');
  return {...input,capabilities:[...input.capabilities]};
 }
+// Whole-sentence "no prerequisites" phrasing from planners, e.g. 无、无依赖、无前置依赖、暂无前置任务、none、no dependencies.
+// Anything else (including prose that names a Ticket) is still resolved as dependency keys and blocks when unresolved.
+const NO_DEPENDENCIES=/^(?:none|n\/a|-|no (?:dependencies|dependency|prerequisites?)|(?:无|暂无|没有|无需|不需要)(?:任何)?(?:前置)?(?:依赖|依赖项|前置任务|前置条件|前置)?(?:项)?)[.。]?$/i;
 async function dependencies(db:LocalDatabase,run:RunRow):Promise<string[]|null> {
  const body=JSON.parse(run.ticket_body) as Record<string,unknown>,raw=body.dependencies;
- if(raw===undefined || raw===null || raw==='' || (typeof raw==='string' && /^(none|无|无依赖|无依赖项|n\/a|-)[.。]?$/i.test(raw.trim())))return [];
+ if(raw===undefined || raw===null || raw==='' || (typeof raw==='string' && NO_DEPENDENCIES.test(raw.trim())))return [];
  if(typeof raw!=='string')return null;
  const keys=[...new Set(raw.split(/[,，、;；\s]+/).filter(Boolean))];if(keys.length>100)return null;
  const ids:string[]=[];
