@@ -195,3 +195,16 @@ test('heartbeat stores runtime access mode and rejects unknown values',async t=>
  await assert.rejects(heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime:{...runtime,access:'bogus'}}),error=>error.status===400);
  assert.equal((await listConnections(db,'alice')).connections[0].runtime.access,'api');
 });
+
+test('repeated heartbeats and MCP use keep only the latest status; events record status changes',async t=>{
+ const {db}=await fixture(t),a=await enroll(db);
+ const agentEvents=async()=>(await listConnections(db,'alice')).connections[0].events.filter(e=>e.mode==='agent');
+ for(let i=0;i<4;i++)await heartbeatConnector(db,a.principal,{mode:'agent',version:'1.0.0',agentReady:true});
+ assert.equal((await agentEvents()).length,1);
+ await heartbeatConnector(db,a.principal,{mode:'agent',version:'1.0.0',agentReady:false,error:'Model API authentication failed (401)'});
+ await heartbeatConnector(db,a.principal,{mode:'agent',version:'1.0.0',agentReady:false,error:'Model API authentication failed (401)'});
+ await heartbeatConnector(db,a.principal,{mode:'agent',version:'1.0.0',agentReady:true});
+ assert.deepEqual((await agentEvents()).map(e=>e.message),['ready','Model API authentication failed (401)','ready']);
+ for(let i=0;i<3;i++)await call(db,a,'list_tickets');
+ assert.equal((await listConnections(db,'alice')).connections[0].events.filter(e=>e.mode==='mcp').length,1);
+});

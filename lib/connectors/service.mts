@@ -26,6 +26,8 @@ export function sanitizedConnectorError(value:unknown):string|null {
   .replace(/https?:\/\/[^\s]+/g,'[url]').replace(/(?:[A-Za-z]:[\\/]|\/)(?:[^\s<>"']+[\\/])+[^\s<>"']*/g,'[path]')
   .replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,300) || 'Agent unavailable';
 }
+// Silence longer than the offline threshold counts as a reconnect.
+const STATUS_GAP_MS=90000;
 export function connectionDTO(row:ConnectionRow, now=Date.now()) {
  const elapsed=now-(row.agent_last_seen??0);
  const status=row.revoked_at!==null?'revoked':row.token_expires_at<=now?'expired':row.agent_last_seen===null?'installed':elapsed<45000?'online':elapsed<90000?'delayed':'offline';
@@ -106,20 +108,23 @@ export async function heartbeatConnector(db:LocalDatabase,principal:ConnectorPri
   runtime=JSON.stringify(safe);
  }
  const agent=input.mode==='agent';
+ const ready=input.agentReady&&!error?1:0;
+ // Heartbeats only refresh the latest status; an event records a reconnect or a status change.
+ const changed=agent?`(agent_last_seen IS NULL OR agent_last_seen<? OR agent_ready<>? OR COALESCE(agent_error,'')<>COALESCE(?,''))`:`(mcp_last_seen IS NULL OR mcp_last_seen<?)`;
  const results=await db.batch([
+  db.prepare(`INSERT INTO workspace_connection_events(id,connection_id,owner,mode,message,created_at) SELECT ?,id,owner,?,?,? FROM workspace_connections WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>? AND ${changed}`)
+   .bind(randomUUID(),agent?'agent':'mcp',agent?(error??(ready?'ready':'not ready')):null,now,principal.id,principal.owner,now,...(agent?[now-STATUS_GAP_MS,ready,error]:[now-STATUS_GAP_MS])),
   db.prepare(`UPDATE workspace_connections SET version=?,last_seen=?,runtime_json=COALESCE(?,runtime_json),${agent?'agent_last_seen=?,agent_ready=?,agent_error=?':'mcp_last_seen=?'} WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?`)
-   .bind(version,now,runtime,...(agent?[now,input.agentReady&&!error?1:0,error]:[now]),principal.id,principal.owner,now),
-  db.prepare(`INSERT INTO workspace_connection_events(id,connection_id,owner,mode,message,created_at) SELECT ?,id,owner,?,?,? FROM workspace_connections WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?`)
-   .bind(randomUUID(),agent?'agent':'mcp',error,now,principal.id,principal.owner,now),
+   .bind(version,now,runtime,...(agent?[now,ready,error]:[now]),principal.id,principal.owner,now),
   db.prepare('DELETE FROM workspace_connection_events WHERE connection_id=? AND id NOT IN (SELECT id FROM workspace_connection_events WHERE connection_id=? ORDER BY created_at DESC,id DESC LIMIT 100)').bind(principal.id,principal.id),
  ]);
- if(results[0].meta.changes!==1)throw new AuthError(401,'Connector credential expired or revoked');
+ if(results[1].meta.changes!==1)throw new AuthError(401,'Connector credential expired or revoked');
  const row=await readConnection(db,principal.id);if(!row)throw Error('Connection unavailable');return {connection:connectionDTO(row)};
 }
 export async function recordConnectorUse(db:LocalDatabase,principal:ConnectorPrincipal) {
- const now=Date.now();const [result]=await db.batch([
+ const now=Date.now();const [,result]=await db.batch([
+  db.prepare("INSERT INTO workspace_connection_events(id,connection_id,owner,mode,created_at) SELECT ?,id,owner,'mcp',? FROM workspace_connections WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>? AND (mcp_last_seen IS NULL OR mcp_last_seen<?)").bind(randomUUID(),now,principal.id,principal.owner,now,now-STATUS_GAP_MS),
   db.prepare('UPDATE workspace_connections SET mcp_last_seen=?,last_seen=? WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?').bind(now,now,principal.id,principal.owner,now),
-  db.prepare("INSERT INTO workspace_connection_events(id,connection_id,owner,mode,created_at) SELECT ?,id,owner,'mcp',? FROM workspace_connections WHERE id=? AND owner=? AND revoked_at IS NULL AND token_expires_at>?").bind(randomUUID(),now,principal.id,principal.owner,now),
   db.prepare('DELETE FROM workspace_connection_events WHERE connection_id=? AND id NOT IN (SELECT id FROM workspace_connection_events WHERE connection_id=? ORDER BY created_at DESC,id DESC LIMIT 100)').bind(principal.id,principal.id),
  ]);
  if(result.meta.changes!==1)throw new AuthError(401,'Connector credential expired or revoked');

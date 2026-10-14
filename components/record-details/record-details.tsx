@@ -81,11 +81,15 @@ function DetailContent({ record, rows, planning, now, saving, error, onClose, on
   const cancel = () => guard(() => { if (!record.id) { if (onBack) onBack(); else onClose(); return; } setDraft({ ...baseline }); setEditing(false); setLocalError(""); });
   const navigate = (value: RecordDraft) => guard(() => onNavigate(value));
   async function saveDraft(after?: () => void) {
-    if (!draft.title.trim()) { setPending(null); setLocalError("请填写标题"); root.current?.querySelector<HTMLInputElement>('input[name="title"]')?.focus(); return; }
+    // Ideas take their title from the first line of the original text.
+    const text = draft.text?.trim() ?? "";
+    if (draft.kind === "idea" && !text) { setPending(null); setLocalError("请填写点子内容"); return; }
+    const value = draft.kind === "idea" ? { ...draft, title: text.split("\n")[0].slice(0, 100) } : draft;
+    if (!value.title.trim()) { setPending(null); setLocalError("请填写标题"); root.current?.querySelector<HTMLInputElement>('input[name="title"]')?.focus(); return; }
     if (draft.kind === "ticket" && draft.status === "done" && !draft.evidence?.trim()) { setPending(null); setLocalError("标记完成前请填写验收证据"); evidence.current?.focus(); return; }
     setLocalError("");
     try {
-      if (await onSave(draft)) { setPending(null); if (after) after(); else onClose(); }
+      if (await onSave(value)) { setPending(null); if (after) after(); else onClose(); }
     } catch (failure) { setPending(null); setLocalError(failure instanceof Error ? failure.message : "保存失败，内容已保留"); }
   }
   const textField = (label: string, key: TextKey, help: string, multiline = true) => <div className="detail-field" key={key}>
@@ -114,7 +118,7 @@ function DetailContent({ record, rows, planning, now, saving, error, onClose, on
       <fieldset disabled={saving} className="detail-fields"><div className="detail-body">
         <div className="detail-basic">
           {onBack && <button type="button" className="text-btn" onClick={() => guard(onBack)} disabled={saving}>返回{record.kind === "ticket" && plan ? "计划" : "上一条记录"}</button>}
-          {editing ? <><label>标题<input data-initial-focus name="title" required maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label><div className="detail-meta-edit">{record.kind !== "run" && <>{textField("项目", "project", "这条记录属于哪个项目。", false)}{selectField("优先级", "priority", priorities, "表示处理紧迫程度，不代表执行领取顺序。")}</>}</div></> : <><h3 className="detail-title">{visible.title}</h3><p>{visible.project || "通用"} · {visible.priority || "P2"}</p></>}
+          {editing ? <>{record.kind !== "idea" && <label>标题<input data-initial-focus name="title" required maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>}<div className="detail-meta-edit">{record.kind !== "run" && <>{textField("项目", "project", "这条记录属于哪个项目。", false)}{selectField("优先级", "priority", priorities, "表示处理紧迫程度，不代表执行领取顺序。")}</>}</div></> : <>{record.kind !== "idea" && <h3 className="detail-title">{visible.title}</h3>}<p>{visible.project || "通用"} · {visible.priority || "P2"}</p></>}
           {record.kind !== "idea" && record.kind !== "run" && <div className="detail-source">{visible.ideaId && <p>{relation}</p>}{record.kind === "ticket" && <>{plan ? <button type="button" className="text-btn" onClick={() => navigate(plan)}>查看来源计划：{plan.title}</button> : <p>{visible.planId ? "关联计划不可用" : "独立任务"}</p>}</>}</div>}
         </div>
         {record.kind === "idea" ? <>

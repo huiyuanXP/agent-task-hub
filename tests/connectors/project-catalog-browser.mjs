@@ -65,18 +65,21 @@ try {
   assert.equal(JSON.parse(job.event).data.project, 'Registered without Ticket');
   console.log('PASS: selected sidebar project binds the saved idea and its real planning event');
 
-  await quickProject.fill('Explicit free input');
-  await page.getByLabel('快速记录点子').fill('Keep my explicit selection');
-  await sidebar.getByRole('button', { name: 'Business project', exact: true }).click();
+  await quickProject.selectOption('Business project');
+  await page.getByRole('button', { name: /点子收件箱/ }).waitFor();
+  assert.equal(await sidebar.locator('.selected').innerText(), 'Business project');
+  await page.getByLabel('点子优先级').selectOption('P1');
+  await page.getByLabel('快速记录点子').fill('Dropdown selected project idea');
   await page.getByRole('button', { name: '刷新数据', exact: true }).click();
   await page.waitForLoadState('networkidle');
-  assert.equal(await quickProject.inputValue(), 'Explicit free input');
-  assert.equal(await page.getByLabel('快速记录点子').inputValue(), 'Keep my explicit selection');
+  assert.equal(await quickProject.inputValue(), 'Business project');
   await page.getByRole('button', { name: '收集点子', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="快速记录点子"]').value === '');
-  const explicit = (await api('/api/records')).records.find(r => r.title === 'Keep my explicit selection');
-  assert.equal(explicit.project, 'Explicit free input');
-  await sidebar.getByRole('button', { name: 'Explicit free input', exact: true }).waitFor();
+  const selected = (await api('/api/records')).records.find(r => r.title === 'Dropdown selected project idea');
+  assert.equal(selected.project, 'Business project');
+  assert.equal(selected.priority, 'P1');
+  await sidebar.getByRole('button', { name: 'Registered without Ticket', exact: true }).click();
+  assert.equal(await quickProject.inputValue(), 'Registered without Ticket');
   await sidebar.getByRole('button', { name: '全部项目', exact: true }).click();
   assert.equal(await quickProject.inputValue(), '通用');
   await page.getByRole('button', { name: '新点子', exact: true }).click();
@@ -84,7 +87,7 @@ try {
   assert.equal(await projectField.getAttribute('list'), 'projects');
   assert.equal(await projectField.inputValue(), '通用');
   await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
-  console.log('PASS: free input and unsaved explicit project survive real data refresh and sidebar changes; all-project view defaults to 通用 and details use the same options');
+  console.log('PASS: capture dropdown and sidebar share one project selection across refresh, ideas save to the selected project and priority; all-project view defaults to 通用 and details use the same options');
 
   await session('bob');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));

@@ -93,6 +93,7 @@ export default function Home() {
     [draft, setDraft] = useState<RecordDraft | null>(null),
     [capture, setCapture] = useState(""),
     [captureProject, setCaptureProject] = useState("通用"),
+    [capturePriority, setCapturePriority] = useState("P2"),
     [planning, setPlanning] = useState<PlanningState>({
       jobs: [],
       subscriptions: 0,
@@ -110,18 +111,16 @@ export default function Home() {
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const identityVersion = useRef(0);
   const loadSequence = useRef(0);
-  const captureProjectExplicit = useRef(false);
+  // The sidebar, filter and capture dropdown share one project selection.
   function selectProject(value: string) {
     setProject(value);
-    if (!captureProjectExplicit.current)
-      setCaptureProject(value === "全部项目" ? "通用" : value);
+    setCaptureProject(value === "全部项目" ? "通用" : value);
   }
   const clearPrivateState = useCallback(() => {
     identityVersion.current++;
     setAccountVersion(identityVersion.current);
     setRows([]);
     setProjects([]);
-    captureProjectExplicit.current = false;
     setBoardAction(null);
     setTicketSort(defaultTicketSort);
     setPlanning({ jobs: [], subscriptions: 0 });
@@ -287,12 +286,9 @@ export default function Home() {
       title: capture.trim().split("\n")[0].slice(0, 100),
       text: capture.trim(),
       project: captureProject,
+      priority: capturePriority,
     });
-    if (d) {
-      setCapture("");
-      captureProjectExplicit.current = false;
-      setCaptureProject(project === "全部项目" ? "通用" : project);
-    }
+    if (d) setCapture("");
   }
   async function requestPlan(idea: Row) {
     const version = identityVersion.current;
@@ -411,8 +407,7 @@ export default function Home() {
             setDraft(null);
             setCapture("");
             setCaptureProject("通用");
-            captureProjectExplicit.current = false;
-            setNotice("");
+                    setNotice("");
             setError("");
             void load();
           }}
@@ -616,15 +611,27 @@ export default function Home() {
               <div className="capture-footer">
                 <label>
                   项目
-                  <input
+                  <select
                     aria-label="点子所属项目"
                     value={captureProject}
-                    onChange={(e) => {
-                      captureProjectExplicit.current = true;
-                      setCaptureProject(e.target.value);
-                    }}
-                    list="projects"
-                  />
+                    onChange={(e) => selectProject(e.target.value)}
+                  >
+                    {(projects.includes(captureProject) ? projects : [captureProject, ...projects]).map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  优先级
+                  <select
+                    aria-label="点子优先级"
+                    value={capturePriority}
+                    onChange={(e) => setCapturePriority(e.target.value)}
+                  >
+                    {["P0", "P1", "P2", "P3"].map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
                 </label>
                 <span>保存后发出 Agent 规划请求</span>
                 <button
