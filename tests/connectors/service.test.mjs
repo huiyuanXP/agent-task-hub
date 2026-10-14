@@ -186,3 +186,12 @@ test('owner sees safe selected runtime while credential fields cannot enter hear
  assert.deepEqual((await listConnections(db,'alice')).connections[0].runtime,runtime);
  assert.equal((await listConnections(db,'bob')).connections.length,0);
 });
+
+test('heartbeat stores runtime access mode and rejects unknown values',async t=>{
+ const {db}=await fixture(t),client=await enroll(db);
+ const runtime={profile:null,model:'mimo-v2.6-flash',provider:'token-plan-cn.xiaomimimo.com',access:'api'};
+ await heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime});
+ assert.deepEqual((await listConnections(db,'alice')).connections[0].runtime,runtime);
+ await assert.rejects(heartbeatConnector(db,client.principal,{mode:'agent',version:'1.0.0',agentReady:true,runtime:{...runtime,access:'bogus'}}),error=>error.status===400);
+ assert.equal((await listConnections(db,'alice')).connections[0].runtime.access,'api');
+});

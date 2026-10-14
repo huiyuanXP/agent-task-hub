@@ -36,4 +36,6 @@ Cancellation, revocation, lease loss and finite timeouts stop the managed proces
 
 `--test-runner FILE` is an explicit synthetic process fixture for the package's tests. Its events and result summaries identify synthetic evidence. It does not demonstrate a real model call. Delivery tests use an actual archive, installer, STDIO subprocess and Git worktree; fixture backend/model receipts are labelled synthetic.
 
+`--access api` selects direct OpenAI-compatible API Call access instead of Codex: `--api-profile NAME` reads `base_url`, `env_key` and model from the machine's `NAME.config.toml` provider, or `--api-base-url URL --api-key-env VAR --api-model MODEL` set them explicitly. Only the endpoint, model and variable name are saved; the key is read from the Agent's environment. Readiness calls `/models`; planning uses read-only list/read/search tools and development adds worktree-confined write, replace and command tools through `/chat/completions` function calls, with the same diff and test-receipt delivery contract. `--access codex` restores Codex.
+
 Official Codex references: [MCP configuration](https://developers.openai.com/codex/mcp/) and [noninteractive execution](https://developers.openai.com/codex/noninteractive/).

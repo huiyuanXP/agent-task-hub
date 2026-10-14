@@ -311,7 +311,7 @@ test('installed runtime inherits default custom provider and persists named prof
   assert.equal(selectedDoctor.code, 0, selectedDoctor.stderr);
   assert.match(selectedDoctor.stdout, /mimo/);
   const profileHeartbeat = item.requests.filter(request => request.body.mode === 'agent').at(-1).body;
-  assert.deepEqual(profileHeartbeat.runtime, { profile: 'mimo', model: 'mimo-selected', provider: 'mimo' });
+  assert.deepEqual(profileHeartbeat.runtime, { profile: 'mimo', model: 'mimo-selected', provider: 'mimo', access: 'codex-config' });
   assert.ok(!JSON.stringify(profileHeartbeat).includes('private-'));
   await writeFile(join(codexHome, 'config.toml'), (await readFile(join(codexHome, 'config.toml'), 'utf8')).replace(/^http_headers.*\n/m, ''));
   await writeFile(join(codexHome, 'oneapi.config.toml'), `model_provider = "oneapi"\n[model_providers.oneapi]\nrequires_openai_auth = true\n`);
@@ -336,4 +336,46 @@ test('planning skips a queued job still cooling down and claims the next eligibl
   const result = await run(process.execPath, [cli, 'agent', '--config', item.config, '--test-runner', item.runner, '--once']);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(item.requests.find(request => request.body.params?.name === 'claim_planning_job').body.params.arguments.job_id, 'synthetic-plan-job');
+});
+
+test('API Call access plans and develops through an OpenAI-compatible endpoint without saving the key', async t => {
+  const item = await setup(t);
+  let step = 0; const calls = [];
+  const api = createServer(async (request, response) => {
+    let raw = ''; for await (const chunk of request) raw += chunk;
+    calls.push({ path: request.url, auth: request.headers.authorization, body: raw ? JSON.parse(raw) : null });
+    response.setHeader('content-type', 'application/json');
+    if (request.url === '/v1/models') return response.end(JSON.stringify({ data: [{ id: 'fixture-model' }] }));
+    const call = (name, args) => ({ choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: `call-${step}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] });
+    const script = [
+      call('write_file', { path: 'change.test.mjs', content: "import test from 'node:test';test('ok',()=>{});" }),
+      call('replace_in_file', { path: 'README.md', old: 'original', new: 'api-changed' }),
+      call('run_command', { command: 'node --test change.test.mjs' }),
+      call('submit_result', { summary: 'Fixture endpoint changed README' }),
+    ];
+    response.end(JSON.stringify(script[step++]));
+  });
+  api.listen(0, '127.0.0.1'); await once(api, 'listening');
+  t.after(() => new Promise(accept => api.close(accept)));
+  const baseUrl = `http://127.0.0.1:${api.address().port}/v1`;
+  const env = { ...process.env, FIXTURE_API_KEY: 'private-api-key' };
+  const missing = await run(process.execPath, [cli, 'doctor', '--config', item.config, '--access', 'api', '--api-base-url', baseUrl, '--api-key-env', 'FIXTURE_API_KEY', '--api-model', 'fixture-model'], { env: { ...process.env } });
+  assert.equal(missing.code, 0, missing.stderr);
+  assert.match(missing.stdout, /Access: API Call/);
+  assert.match(missing.stdout, /FIXTURE_API_KEY is not set/);
+  const result = await run(process.execPath, [cli, 'agent', '--config', item.config, '--once'], { env });
+  assert.equal(result.code, 0, result.stderr);
+  const complete = item.requests.find(request => request.body.action === 'complete');
+  assert.ok(complete, result.stderr);
+  assert.match(complete.body.result.diff, /api-changed/);
+  assert.equal(complete.body.result.tests[0].exitCode, 0);
+  assert.equal(await readFile(join(item.directory, 'README.md'), 'utf8'), 'original main workspace\n');
+  assert.ok(calls.every(call => call.auth === 'Bearer private-api-key'));
+  assert.equal(calls.find(call => call.path === '/v1/chat/completions').body.model, 'fixture-model');
+  const heartbeat = item.requests.filter(request => request.body.mode === 'agent').at(-1).body;
+  assert.deepEqual(heartbeat.runtime, { profile: null, model: 'fixture-model', provider: new URL(baseUrl).host, access: 'api' });
+  assert.equal(heartbeat.agentReady, true);
+  const saved = await readFile(item.config, 'utf8');
+  assert.ok(!saved.includes('private-api-key'));
+  assert.deepEqual(JSON.parse(saved).api, { baseUrl, keyEnv: 'FIXTURE_API_KEY', model: 'fixture-model' });
 });

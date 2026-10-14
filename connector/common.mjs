@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 
 export const VERSION = '1.0.0';
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'README.md'];
+export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'api-runner.mjs', 'README.md'];
 export function checkNode() {
   const [major, minor, patch] = process.versions.node.split('.').map(Number);
   if (major < 22 || (major === 22 && (minor < 23 || (minor === 23 && patch < 3)))) throw Error('Node.js 22.23.3 or newer is required');
@@ -111,6 +111,6 @@ export async function git(workspace, args) {
 export async function heartbeat(config, mode, agentReady = false, error) {
   const runtime = config.runtimeSelection;
   return request(config, '/api/connector/heartbeat', { mode, version: VERSION, agentReady,
-    ...(runtime ? { runtime: Object.fromEntries(['profile', 'model', 'provider'].map(name => [name, typeof runtime[name] === 'string' ? runtime[name] : null])) } : {}),
+    ...(runtime ? { runtime: Object.fromEntries(['profile', 'model', 'provider', 'access'].map(name => [name, typeof runtime[name] === 'string' ? runtime[name] : null])) } : {}),
     ...(error ? { error: redact(error, config) } : {}) });
 }

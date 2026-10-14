@@ -48,4 +48,17 @@ node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs doctor --workspace 
 
 显式选项保存在本机客户端配置，不复制模型凭据。--profile default 恢复默认 Profile；省略 --model 和 --reasoning 时沿用 Codex 配置。后台连接记录显示所选 Profile、模型和 provider，实际调用失败时显示真实错误。
 
-使用官方账户认证方式且本机尚未登录时，仍可自行 codex login；已有 Profile 的 API 认证由本机 Codex 处理。独立于 CLI 的直接 API Call 适配器另有后续 Ticket，尚未实现。
+使用官方账户认证方式且本机尚未登录时，仍可自行 codex login；已有 Profile 的 API 认证由本机 Codex 处理。
+
+## 接入方式
+
+客户端支持三种模型接入方式：Codex 本机默认配置或 Profile、Codex 账户登录，以及不经过 Codex CLI 的直接 API Call。前两种由 `codex exec` 执行；`--access codex` 恢复为 Codex。
+
+直接 API Call 使用 OpenAI 兼容的 Chat Completions 协议（`/models` 与 `/chat/completions`，函数工具调用）。`--api-profile NAME` 从本机 `NAME.config.toml` 的 provider 读取 `base_url`、`env_key` 与模型；也可用 `--api-base-url`、`--api-key-env`、`--api-model` 显式指定或覆盖：
+
+```sh
+node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs doctor --workspace /absolute/project --access api --api-profile mimo
+node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs agent --workspace /absolute/project --access api --api-base-url https://gateway.example/v1 --api-key-env GATEWAY_API_KEY --api-model model-name
+```
+
+`connection.json` 只保存端点、模型和密钥环境变量名；密钥只从运行 Agent 的进程环境读取，不写入文件、心跳或 Hub。就绪检查真实请求 `/models` 并确认所选模型可用，失败原因（如未设置变量或 401）作为 Agent 错误显示在连接页面。规划时模型只能使用只读的列目录、读文件和 ripgrep 搜索工具；开发时在隔离 worktree 内额外使用写文件、精确替换和运行命令工具，路径限定在 worktree 内且不可修改 `.git`，命令进程不继承 API 密钥，push、remote、Git 配置和 npm publish 被拒绝。测试类命令的退出码和输出作为实际收据交付，交付合同与 Codex 方式相同。

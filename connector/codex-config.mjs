@@ -158,7 +158,7 @@ export async function codexMetadata(options = {}, workspace = process.cwd()) {
     return parts[0] === 'model_providers' && parts[1] === provider && parts[2] === 'env_http_headers' && parts.length === 4;
   });
   const credentialFree = customProvider && !envKey && !declaredEnvHeader && !requiresOpenaiAuth;
-  return { provider, model: options.model || get('model'), customProvider, requiresOpenaiAuth, configuredCredentials, persistedAuth, credentialFree, secrets, mcp: [...mcp] };
+  return { provider, model: options.model || get('model'), baseUrl: typeof baseUrl === 'string' ? baseUrl : null, envKey: typeof envKey === 'string' ? envKey : null, customProvider, requiresOpenaiAuth, configuredCredentials, persistedAuth, credentialFree, secrets, mcp: [...mcp] };
 }
 export function selectedCodexOptions(config, options) {
   const selected = { ...options };

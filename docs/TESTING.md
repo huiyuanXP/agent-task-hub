@@ -9,8 +9,11 @@ npm run lint
 npm run test:local
 npm run test:connectors
 npm run test:ticket-status:native
+node --experimental-strip-types tests/api-access-native.mjs
 node --experimental-strip-types tests/connectors/project-catalog-browser.mjs
 ```
+
+`tests/api-access-native.mjs` 在全新临时 SQLite 与临时 Git 项目上安装 API Call 方式的客户端，通过真实 OpenAI 兼容端点完成规划、批准后的 worktree 开发与测试收据，并在锁定 Chromium 中核对连接页面的接入方式与就绪状态；它读取 `API_ACCESS_PROFILE`（默认 `mimo`）对应 Profile 的端点、模型和密钥变量，未设置密钥时输出 SKIP。
 
 `npm run test:ticket-status:native` 使用真实安装的 CLI/STDIO、loopback HTTP 与锁定 Chromium，将 MCP 写回后的状态列、追加证据和旧目标/范围在同一全新 SQLite 上交叉核对；其实际 Node 算术命令只验证调用方原生协议证据，不能计作模型验收。目录 `TICKET_STATUS_EVIDENCE_DIR` 可指定私有日志与截图；工具合同见[MCP Ticket 状态写回](MCP-TICKET-WRITES.md)。
 
