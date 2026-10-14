@@ -4,13 +4,14 @@ import type { ReactNode, FormEvent } from "react";
 import { X } from "lucide-react";
 import type { RecordDraft, Row, PlanningState } from "../../lib/types";
 import { PlanningStatus, planningControls } from "../planning-status";
+import { ProjectSelect } from "../projects/project-select";
 
 const statuses: Record<string, string> = { todo: "待开始", running: "进行中", waiting: "等待中", done: "已完成", error: "异常" };
 const reasons: Record<string, string> = { clarification: "需要澄清", approval: "需要授权", review: "等待验收", external: "外部依赖", recovery: "恢复确认" };
 const priorities = { P0: "P0 · 紧急", P1: "P1 · 重要", P2: "P2 · 常规", P3: "P3 · 有空再做" };
 type TextKey = "project" | "text" | "goal" | "scope" | "acceptance" | "dependencies" | "assumptions" | "allowedActions" | "budget" | "notes" | "queue" | "evidence";
 type Props = {
-  record: RecordDraft; rows: Row[]; planning: PlanningState; now: number; saving: boolean; error: string;
+  record: RecordDraft; rows: Row[]; projects: string[]; planning: PlanningState; now: number; saving: boolean; error: string;
   onClose: () => void; onSave: (value: RecordDraft) => Promise<{ id: string; revision: number } | null>;
   onRequestPlan: (idea: Row) => Promise<void>;
   newRecord: (kind: string) => RecordDraft;
@@ -63,7 +64,7 @@ export function RecordDetails(props: Props) {
   </div>;
 }
 
-function DetailContent({ record, rows, planning, now, saving, error, onClose, onSave, onRequestPlan, newRecord, renderExecution, onNavigate, onBack, onScrollReset }: Props & { onNavigate: (record: RecordDraft) => void; onBack?: () => void; onScrollReset: () => void }) {
+function DetailContent({ record, rows, projects, planning, now, saving, error, onClose, onSave, onRequestPlan, newRecord, renderExecution, onNavigate, onBack, onScrollReset }: Props & { onNavigate: (record: RecordDraft) => void; onBack?: () => void; onScrollReset: () => void }) {
   const [draft, setDraft] = useState<RecordDraft>({ ...record });
   const [baseline, setBaseline] = useState<RecordDraft>({ ...record });
   const [editing, setEditing] = useState(!record.id);
@@ -84,6 +85,7 @@ function DetailContent({ record, rows, planning, now, saving, error, onClose, on
     // Ideas take their title from the first line of the original text.
     const text = draft.text?.trim() ?? "";
     if (draft.kind === "idea" && !text) { setPending(null); setLocalError("请填写点子内容"); return; }
+    if (draft.kind !== "run" && !draft.project?.trim()) { setPending(null); setLocalError("请选择或填写项目"); return; }
     const value = draft.kind === "idea" ? { ...draft, title: text.split("\n")[0].slice(0, 100) } : draft;
     if (!value.title.trim()) { setPending(null); setLocalError("请填写标题"); root.current?.querySelector<HTMLInputElement>('input[name="title"]')?.focus(); return; }
     if (draft.kind === "ticket" && draft.status === "done" && !draft.evidence?.trim()) { setPending(null); setLocalError("标记完成前请填写验收证据"); evidence.current?.focus(); return; }
@@ -118,7 +120,7 @@ function DetailContent({ record, rows, planning, now, saving, error, onClose, on
       <fieldset disabled={saving} className="detail-fields"><div className="detail-body">
         <div className="detail-basic">
           {onBack && <button type="button" className="text-btn" onClick={() => guard(onBack)} disabled={saving}>返回{record.kind === "ticket" && plan ? "计划" : "上一条记录"}</button>}
-          {editing ? <>{record.kind !== "idea" && <label>标题<input data-initial-focus name="title" required maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>}<div className="detail-meta-edit">{record.kind !== "run" && <>{textField("项目", "project", "这条记录属于哪个项目。", false)}{selectField("优先级", "priority", priorities, "表示处理紧迫程度，不代表执行领取顺序。")}</>}</div></> : <>{record.kind !== "idea" && <h3 className="detail-title">{visible.title}</h3>}<p>{visible.project || "通用"} · {visible.priority || "P2"}</p></>}
+          {editing ? <>{record.kind !== "idea" && <label>标题<input data-initial-focus name="title" required maxLength={250} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>}<div className="detail-meta-edit">{record.kind !== "run" && <><div className="detail-field"><label>项目<ProjectSelect label="项目" value={draft.project ?? ""} projects={projects} onChange={project => setDraft({ ...draft, project })} /></label><span className="form-help">这条记录属于哪个项目。</span></div>{selectField("优先级", "priority", priorities, "表示处理紧迫程度，不代表执行领取顺序。")}</>}</div></> : <>{record.kind !== "idea" && <h3 className="detail-title">{visible.title}</h3>}<p>{visible.project || "通用"} · {visible.priority || "P2"}</p></>}
           {record.kind !== "idea" && record.kind !== "run" && <div className="detail-source">{visible.ideaId && <p>{relation}</p>}{record.kind === "ticket" && <>{plan ? <button type="button" className="text-btn" onClick={() => navigate(plan)}>查看来源计划：{plan.title}</button> : <p>{visible.planId ? "关联计划不可用" : "独立任务"}</p>}</>}</div>}
         </div>
         {record.kind === "idea" ? <>

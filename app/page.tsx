@@ -12,6 +12,7 @@ import { PlanningStatus, planningControls } from "../components/planning-status"
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
 import { ConnectionPanel } from "../components/connectors/connection-panel";
 import { DevelopmentPanel } from "../components/workspace-runs/development-panel";
+import { ProjectSelect } from "../components/projects/project-select";
 import type { FormEvent } from "react";
 import { TicketExecutionPanel } from "../components/ticket-execution/ticket-execution-panel";
 import { RecordDetails } from "../components/record-details/record-details";
@@ -625,15 +626,12 @@ export default function Home() {
               <div className="capture-footer">
                 <label>
                   项目
-                  <select
-                    aria-label="点子所属项目"
+                  <ProjectSelect
+                    label="点子所属项目"
                     value={captureProject}
-                    onChange={(e) => selectProject(e.target.value)}
-                  >
-                    {(projects.includes(captureProject) ? projects : [captureProject, ...projects]).map((p) => (
-                      <option key={p}>{p}</option>
-                    ))}
-                  </select>
+                    projects={projects}
+                    onChange={(value) => projects.includes(value) ? selectProject(value) : setCaptureProject(value)}
+                  />
                 </label>
                 <label>
                   优先级
@@ -1015,7 +1013,7 @@ export default function Home() {
         ))}
       </datalist>
       {boardAction&&<TicketActionDialog key={boardAction.ticket.id+":"+boardAction.ticket.revision+":"+boardAction.target} ticket={boardAction.ticket} target={boardAction.target} current={rows.some(row=>row.id===boardAction.ticket.id&&row.revision===boardAction.ticket.revision)} onClose={()=>setBoardAction(null)} onAuthenticationDenied={panelAuthenticationDenied} onRecordsChanged={()=>void load(true)}/>}
-      {draft && <RecordDetails key={draft.id ?? draft.kind} record={draft} rows={rows} planning={planning} now={planningNow} saving={saving} error={error} onClose={() => setDraft(null)} onSave={value => save(value, true)} onRequestPlan={requestPlan} newRecord={empty} renderExecution={ticket => <TicketExecutionPanel ticket={ticket} onAuthenticationDenied={panelAuthenticationDenied} onRecordsChanged={() => void load(true)} />} />}
+      {draft && <RecordDetails key={draft.id ?? draft.kind} record={draft} rows={rows} projects={projects} planning={planning} now={planningNow} saving={saving} error={error} onClose={() => setDraft(null)} onSave={value => save(value, true)} onRequestPlan={requestPlan} newRecord={empty} renderExecution={ticket => <TicketExecutionPanel ticket={ticket} onAuthenticationDenied={panelAuthenticationDenied} onRecordsChanged={() => void load(true)} />} />}
     </div>
   );
 }

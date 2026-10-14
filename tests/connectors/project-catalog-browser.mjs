@@ -84,10 +84,26 @@ try {
   assert.equal(await quickProject.inputValue(), '通用');
   await page.getByRole('button', { name: '新点子', exact: true }).click();
   const projectField = page.getByRole('dialog').getByLabel('项目', { exact: true });
-  assert.equal(await projectField.getAttribute('list'), 'projects');
+  assert.deepEqual(await projectField.locator('option').evaluateAll(nodes => nodes.map(n => n.textContent)), [...await options('#projects'), '+ 新建项目…']);
   assert.equal(await projectField.inputValue(), '通用');
+  await projectField.selectOption('Business project');
+  assert.equal(await projectField.inputValue(), 'Business project');
+  await projectField.selectOption({ label: '+ 新建项目…' });
+  await page.getByRole('dialog').getByLabel('新项目名称').fill('Detail new project');
+  await page.getByRole('dialog').getByRole('textbox', { name: '原始内容' }).fill('Detail form project idea');
+  await page.getByRole('dialog').getByRole('button', { name: '保存到本地', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.equal((await api('/api/records')).records.find(r => r.text === 'Detail form project idea').project, 'Detail new project');
+  await sidebar.getByRole('button', { name: 'Detail new project', exact: true }).waitFor();
+  await quickProject.selectOption({ label: '+ 新建项目…' });
+  await page.getByLabel('新项目名称').fill('Quick new project');
+  await page.getByLabel('快速记录点子').fill('Quick new project idea');
+  await page.getByRole('button', { name: '收集点子', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="快速记录点子"]').value === '');
+  assert.equal((await api('/api/records')).records.find(r => r.text === 'Quick new project idea').project, 'Quick new project');
+  await page.getByRole('button', { name: '新点子', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
-  console.log('PASS: capture dropdown and sidebar share one project selection across refresh, ideas save to the selected project and priority; all-project view defaults to 通用 and details use the same options');
+  console.log('PASS: quick capture and record forms share one project chooser that picks any project or names a new one; capture dropdown and sidebar share one project selection across refresh, ideas save to the selected project and priority; all-project view defaults to 通用 and details use the same options');
 
   await session('bob');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
