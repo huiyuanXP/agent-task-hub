@@ -61,8 +61,9 @@ export function useTicketExecution({ticketId,revision,project,onAuthenticationDe
   if(!connection||!Number.isFinite(minutes)||minutes<1||minutes>60)return;
   const input={ticketId,revision,connectionId:connection.id,timeoutMs:Math.round(minutes*60000)};
   if(!pending.current||JSON.stringify({...pending.current,requestId:undefined})!==JSON.stringify(input))pending.current={...input,requestId:crypto.randomUUID()};
-  void write({action:'prepare',...pending.current});
+  void write({action:'prepare',...pending.current},true);
  }
- function act(runId:string,action:OwnerAction){void write({action,runId},action==='accept');}
+ // Every Run decision changes the board column, so the page re-reads Runs and records.
+ function act(runId:string,action:OwnerAction){void write({action,runId},true);}
  return {connections:availableConnections,connection,connectionId,setConnectionId,minutes,setMinutes,runs,dockerRuns,error,conflict,loading,busy,refresh,prepare,act};
 }

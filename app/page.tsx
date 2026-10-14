@@ -3,7 +3,10 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {TicketBoard} from "../components/board/ticket-board";
 import {TicketCard} from "../components/board/ticket-card";
 import {TicketActionDialog} from "../components/board/ticket-action-dialog";
-import {sortTickets,filterTickets,defaultTicketSort} from "../lib/tickets/selectors.mts";
+import {sortTickets,filterTickets,defaultTicketSort,boardState,ticketReadiness} from "../lib/tickets/selectors.mts";
+import type {BoardState} from "../lib/tickets/selectors.mts";
+import type {WorkspaceRun} from "../lib/workspace-runs/types.mts";
+import type {Run as DockerRun} from "../lib/execution/types.mts";
 import type {TicketSort} from "../lib/tickets/selectors.mts";
 import { PlanningStatus, planningControls } from "../components/planning-status";
 import { AuthorizationPanel } from "../components/execution/authorization-panel";
@@ -100,6 +103,7 @@ export default function Home() {
     });
   const [ticketSort,setTicketSort]=useState<TicketSort>(defaultTicketSort);
   const [boardAction,setBoardAction]=useState<{ticket:Row;target:string}|null>(null);
+  const [boardRuns,setBoardRuns]=useState<{workspace:WorkspaceRun[];docker:DockerRun[]}>({workspace:[],docker:[]});
   const [planningNow, setPlanningNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setPlanningNow(Date.now()), 1000);
@@ -122,6 +126,7 @@ export default function Home() {
     setRows([]);
     setProjects([]);
     setBoardAction(null);
+    setBoardRuns({workspace:[],docker:[]});
     setTicketSort(defaultTicketSort);
     setPlanning({ jobs: [], subscriptions: 0 });
     setDraft(null);
@@ -202,6 +207,13 @@ export default function Home() {
           pd = (await pr.json()) as PlanningState;
         if (!r.ok) throw Error(d.error);
         if (!pr.ok) throw Error(pd.error);
+        // Real Run states drive board columns; a failed read keeps the last known states.
+        const runs = await Promise.all([
+          fetch("/api/workspace-runs?limit=100&eventLimit=1", { cache: "no-store" }).then(response => response.ok ? response.json() as Promise<{ runs: WorkspaceRun[] }> : null),
+          ...["queued", "running", "waiting"].map(state => fetch("/api/execution?state=" + state + "&limit=100", { cache: "no-store" }).then(response => response.ok ? response.json() as Promise<{ runs: DockerRun[] }> : null)),
+        ]).catch(() => null);
+        if (seq === loadSequence.current && runs && runs.every(Boolean))
+          setBoardRuns({ workspace: runs[0]!.runs as WorkspaceRun[], docker: runs.slice(1).flatMap(page => page!.runs as DockerRun[]) });
         if (seq === loadSequence.current) {
           setRows(d.records);
           setProjects(d.projects.map(entry => entry.name));
@@ -386,8 +398,10 @@ export default function Home() {
     runs: "保留执行时的任务版本与验收证据。",
     integrations: "安装 MCP、关联 workspace，查看真实连接与 Agent 状态。",
   };
-  const visibleTickets=sortTickets(filterTickets(tickets,{project,query,status:stateFilter}),ticketSort);
-  const openBoardIntent=(ticket:Row,target:string)=>{if(target!==ticket.status)setBoardAction({ticket,target});};
+  const boardStates=new Map<string,BoardState>(tickets.map(ticket=>[ticket.id,boardState(ticket,boardRuns.workspace,boardRuns.docker)]));
+  const readiness=ticketReadiness(tickets,boardStates);
+  const visibleTickets=sortTickets(filterTickets(tickets,{project,query}).filter(ticket=>stateFilter==="all"||boardStates.get(ticket.id)?.status===stateFilter),ticketSort,readiness);
+  const openBoardIntent=(ticket:Row,target:string)=>{if(target!==(boardStates.get(ticket.id)?.status??ticket.status))setBoardAction({ticket,target});};
   const openBoardExecution=(ticket:Row)=>setBoardAction({ticket,target:"execute"});
   function ticketCard(ticket:Row){return <TicketCard key={ticket.id} ticket={ticket} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>;}
   return (
@@ -708,8 +722,8 @@ export default function Home() {
                         </option>
                       ))}
                     </select>
-                    <select aria-label="任务排序" value={ticketSort.field} onChange={event=>setTicketSort({...ticketSort,field:event.target.value as TicketSort["field"]})}><option value="created">创建时间</option><option value="updated">更新时间</option><option value="priority">优先级（仅展示）</option></select>
-                    <select aria-label="排序方向" value={ticketSort.direction} onChange={event=>setTicketSort({...ticketSort,direction:event.target.value as TicketSort["direction"]})}><option value="desc">{ticketSort.field==="priority"?"低到高":"新到旧"}</option><option value="asc">{ticketSort.field==="priority"?"高到低":"旧到新"}</option></select>
+                    <select aria-label="任务排序" value={ticketSort.field} onChange={event=>setTicketSort({...ticketSort,field:event.target.value as TicketSort["field"]})}><option value="recommended">推荐执行顺序</option><option value="created">创建时间</option><option value="updated">更新时间</option><option value="priority">优先级（仅展示）</option></select>
+                    {ticketSort.field!=="recommended"&&<select aria-label="排序方向" value={ticketSort.direction} onChange={event=>setTicketSort({...ticketSort,direction:event.target.value as TicketSort["direction"]})}><option value="desc">{ticketSort.field==="priority"?"低到高":"新到旧"}</option><option value="asc">{ticketSort.field==="priority"?"高到低":"旧到新"}</option></select>}
                     <button
                       className="icon-btn"
                       aria-label="切换列表或看板"
@@ -876,7 +890,7 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {view === "board" && <TicketBoard tickets={visibleTickets} list={list} statusFilter={stateFilter} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>}
+              {view === "board" && <TicketBoard tickets={visibleTickets} list={list} statusFilter={stateFilter} onDetails={ticket=>setDraft({...ticket})} states={boardStates} readiness={ticketSort.field==="recommended"?readiness:undefined} onIntent={openBoardIntent} onExecute={openBoardExecution}/>}
               {view === "review" && (
                 <div className="idea-grid">
                   {filtered(waiting).map(ticketCard)}

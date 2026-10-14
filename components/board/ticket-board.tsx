@@ -3,13 +3,16 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent, KeyboardEvent } from "react";
 import type { Row } from "../../lib/types";
 import { TicketCard, ticketStatuses } from "./ticket-card";
+import type { BoardState, Readiness } from "../../lib/tickets/selectors.mts";
 type Drag = {
     ticket: Row;
     target: string | null;
     keyboard: boolean;
 };
-export function TicketBoard({ tickets, list, statusFilter, onDetails, onIntent, onExecute }: {
+export function TicketBoard({ tickets, states, readiness, list, statusFilter, onDetails, onIntent, onExecute }: {
     tickets: Row[];
+    states: ReadonlyMap<string, BoardState>;
+    readiness?: ReadonlyMap<string, Readiness>;
     list: boolean;
     statusFilter: string;
     onDetails: (ticket: Row) => void;
@@ -24,7 +27,9 @@ export function TicketBoard({ tickets, list, statusFilter, onDetails, onIntent, 
         pointerId: number;
     } | null>(null);
     const intentRef = useRef(onIntent);
-    useEffect(() => { intentRef.current = onIntent; }, [onIntent]);
+    const column = (ticket: Row) => states.get(ticket.id)?.status ?? ticket.status ?? "todo";
+    const columnRef = useRef(column);
+    useEffect(() => { intentRef.current = onIntent; columnRef.current = column; });
     const columns = Object.entries(ticketStatuses).filter(([state]) => statusFilter === "all" || state === statusFilter);
     const update = (value: Drag | null) => { dragRef.current = value; setDrag(value); };
     const cancel = () => { pending.current = null; update(null); setAnnouncement("已取消移动；任务状态保持不变。"); };
@@ -57,7 +62,7 @@ export function TicketBoard({ tickets, list, statusFilter, onDetails, onIntent, 
             position = null;
             dragRef.current = null;
             setDrag(null);
-            if (current && target && target !== current.ticket.status)
+            if (current && target && target !== columnRef.current(current.ticket))
                 intentRef.current(current.ticket, target);
             else
                 setAnnouncement("移动结束；任务状态保持不变。");
@@ -101,12 +106,12 @@ export function TicketBoard({ tickets, list, statusFilter, onDetails, onIntent, 
             event.preventDefault();
             const current = dragRef.current;
             if (!current) {
-                update({ ticket, target: ticket.status || "todo", keyboard: true });
+                update({ ticket, target: column(ticket), keyboard: true });
                 setAnnouncement("已选中 " + ticket.title + "。方向键选择目标列，Enter 确认，Escape 取消。");
             }
             else {
                 update(null);
-                if (current.target && current.target !== current.ticket.status)
+                if (current.target && current.target !== column(current.ticket))
                     onIntent(current.ticket, current.target);
                 else
                     setAnnouncement("同列操作结束；任务状态保持不变。");
@@ -124,6 +129,6 @@ export function TicketBoard({ tickets, list, statusFilter, onDetails, onIntent, 
             }
         }
     };
-    const card = (ticket: Row) => <TicketCard key={ticket.id} ticket={ticket} onDetails={onDetails} onIntent={onIntent} onExecute={onExecute} onPointerDown={list ? undefined : pointerDown} onKeyDown={keyDown} dragging={drag?.ticket.id === ticket.id}/>;
-    return <section aria-label="Ticket 看板任务"><p id="board-drag-instructions" className="board-help">拖动手柄选择列；键盘用空格选中、方向键选择、Enter 确认、Escape 取消。也可使用卡片的“移动 / 处理”。进入操作后再确认，释放不会直接执行。</p><div role="status" aria-live="polite" className="board-announcement">{announcement}</div>{list ? <div className="ticket-list">{tickets.map(card)}{!tickets.length && <p className="column-empty">暂无任务</p>}</div> : <div className="board">{columns.map(([state, label]) => <section className={"column " + state} key={state} data-board-target={state} data-drop-target={drag?.target === state || undefined} aria-label={label + "列"}><header><span className="state-dot"/><h2>{label}</h2><span>{tickets.filter(ticket => (ticket.status || "todo") === state).length}</span></header>{tickets.filter(ticket => (ticket.status || "todo") === state).map(card)}{!tickets.some(ticket => (ticket.status || "todo") === state) && <div className="column-empty">暂无任务</div>}{drag?.target === state && <p className="board-target-feedback">{state === drag.ticket.status ? "同列：不保存位置" : "释放后进入操作：" + label}</p>}</section>)}</div>}</section>;
+    const card = (ticket: Row) => <TicketCard key={ticket.id} ticket={ticket} onDetails={onDetails} onIntent={onIntent} onExecute={onExecute} onPointerDown={list ? undefined : pointerDown} onKeyDown={keyDown} dragging={drag?.ticket.id === ticket.id} state={states.get(ticket.id)} readiness={readiness?.get(ticket.id)}/>;
+    return <section aria-label="Ticket 看板任务"><p id="board-drag-instructions" className="board-help">拖动手柄选择列；键盘用空格选中、方向键选择、Enter 确认、Escape 取消。也可使用卡片的“移动 / 处理”，效果与拖动相同。拖到“进行中”并批准开发后，任务随真实执行状态移动；释放不会直接执行。</p><div role="status" aria-live="polite" className="board-announcement">{announcement}</div>{list ? <div className="ticket-list">{tickets.map(card)}{!tickets.length && <p className="column-empty">暂无任务</p>}</div> : <div className="board">{columns.map(([state, label]) => <section className={"column " + state} key={state} data-board-target={state} data-drop-target={drag?.target === state || undefined} aria-label={label + "列"}><header><span className="state-dot"/><h2>{label}</h2><span>{tickets.filter(ticket => column(ticket) === state).length}</span></header>{tickets.filter(ticket => column(ticket) === state).map(card)}{!tickets.some(ticket => column(ticket) === state) && <div className="column-empty">暂无任务</div>}{drag?.target === state && <p className="board-target-feedback">{state === column(drag.ticket) ? "同列：不保存位置" : "释放后进入操作：" + label}</p>}</section>)}</div>}</section>;
 }

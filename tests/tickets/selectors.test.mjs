@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sortTickets,filterTickets,resolveTicketAction,ticketExecutionContext} from '../../lib/tickets/selectors.mts';
+import {sortTickets,filterTickets,resolveTicketAction,ticketExecutionContext,boardState,ticketReadiness} from '../../lib/tickets/selectors.mts';
 const row=(id,extra={})=>({id,kind:'ticket',revision:2,title:id,project:'test',status:'todo',created:'2026-01-01T00:00:00Z',updated:'2026-01-01T00:00:00Z',...extra});
 test('priority directions keep unknown values last and use created descending then ID',()=>{
  const rows=[row('unknown',{priority:'P9'}),row('p3',{priority:'P3'}),row('b',{priority:'P1'}),row('a',{priority:'P1'}),row('new',{priority:'P1',created:'2026-01-02'}),row('bad',{priority:'P1',created:'invalid'}),row('p0',{priority:'P0'}),row('p2',{priority:'P2'})];
@@ -34,4 +34,33 @@ test('actions use exact revision review; old active Run blocks replacement; done
  const context=ticketExecutionContext(ticket,[workspace('old',1,'running'),workspace('recent',2,'failed')],[docker('old-d',1,'queued')]);
  assert.equal(context.currentWorkspace.length,1);assert.equal(context.historicalWorkspace.length,1);
  assert.equal(context.activeWorkspace.id,'old');assert.equal(context.activeDocker.id,'old-d');
+});
+test('board state follows real Runs: approve and claim move to running, failure to error, done stays done',()=>{
+ const ticket=row('ticket');
+ assert.deepEqual(boardState(ticket,[workspace('p',2,'pending',{createdAt:1})],[]),{status:'todo',tag:'开发申请待批准'});
+ assert.equal(boardState(ticket,[workspace('a',2,'approved',{createdAt:1})],[]).status,'running');
+ assert.equal(boardState(ticket,[workspace('r',2,'review',{createdAt:1})],[]).status,'running');
+ assert.equal(boardState(ticket,[],[docker('d',2,'running')]).status,'running');
+ assert.equal(boardState(ticket,[workspace('f',2,'failed',{createdAt:2,error:'boom'}),workspace('old',2,'succeeded',{createdAt:1})],[]).status,'error');
+ assert.equal(boardState(ticket,[workspace('f',1,'failed',{createdAt:2})],[]).status,'todo');
+ assert.equal(boardState(row('ticket',{status:'done'}),[workspace('a',2,'approved',{createdAt:1})],[]).status,'done');
+ assert.equal(resolveTicketAction(ticket,'todo').type,'no-op');
+});
+test('recommended order is deterministic: runnable first, then in progress, waiting, blocked, done',()=>{
+ const plan={planId:'plan'};
+ const tickets=[
+  row('done',{...plan,logicalKey:'T0',status:'done'}),
+  row('blocked',{...plan,logicalKey:'T2',dependencies:'T1',priority:'P0'}),
+  row('root',{...plan,logicalKey:'T1',priority:'P3',created:'2026-01-03T00:00:00Z'}),
+  row('free',{...plan,logicalKey:'T3',dependencies:'T0',priority:'P1'}),
+  row('waiting',{status:'waiting'}),
+  row('running',{}),
+  row('unknown',{...plan,dependencies:'missing-key'}),
+ ];
+ const states=new Map([['running',{status:'running'}]]);
+ const readiness=ticketReadiness(tickets,states);
+ assert.deepEqual(sortTickets(tickets,{field:'recommended',direction:'asc'},readiness).map(r=>r.id),['root','free','running','waiting','blocked','unknown','done']);
+ assert.equal(readiness.get('root').unlocks,1);
+ assert.deepEqual(readiness.get('blocked').blockers,['T1']);
+ assert.match(readiness.get('unknown').label,/未找到/);
 });

@@ -15,10 +15,13 @@ function BoundTicketExecutionPanel({ticket,onAuthenticationDenied,onRecordsChang
  const active=context.activeWorkspace||context.activeDocker;
  return <section className="workspace-section" aria-label="Ticket 执行">
   <div className="section-heading"><div><h2>执行：{ticket.title}</h2><p>冻结 Ticket v{ticket.revision} · {ticket.project||'通用'} · 手工状态：{ticket.status}</p></div><button type="button" className="secondary" onClick={()=>void controller.refresh()}>刷新执行</button></div>
-  <div className="card-actions"><button type="button" className="secondary" aria-pressed={backend==='workspace'} onClick={()=>setBackend('workspace')}>本机 Agent 开发</button><button type="button" className="secondary" aria-pressed={backend==='docker'} onClick={()=>setBackend('docker')}>固定 Docker 操作</button></div>
+  <div className="execution-modes" role="tablist" aria-label="执行方式">
+   <button type="button" role="tab" aria-selected={backend==='workspace'} className={backend==='workspace'?'active':''} onClick={()=>setBackend('workspace')}><strong>本机 Agent 开发</strong><small>由已连接 workspace 的常驻 Agent 在隔离 worktree 中修改代码并交回 diff 与测试，适合实现 Ticket。</small></button>
+   <button type="button" role="tab" aria-selected={backend==='docker'} className={backend==='docker'?'active':''} onClick={()=>setBackend('docker')}><strong>固定 Docker 操作</strong><small>在签名的本地 Docker 后端运行预先登记的固定命令，无网络、无凭据，需单独授权资源预算；不修改代码。</small></button>
+  </div>
   {intent==='review'&&!controller.loading&&!context.currentWorkspace.some(run=>run.state==='review'&&(!runId||run.id===runId))&&<p className="form-error">当前修订没有此待验收开发结果，请刷新关联执行。</p>}
   {backend==='workspace'&&<>
-   <p>申请生成待批准 Run；明确批准后 Agent 才能领取。安装连接不构成此 Ticket 执行许可。</p>
+   <p>流程：申请开发 → 批准（任务进入“进行中”）→ Agent 领取并开发 → 待验收 → 验收通过（任务进入“已完成”）。安装连接不构成此 Ticket 执行许可。</p>
    {!active&&ticket.status!=='done'&&<div className="workspace-form">
     <label>执行 workspace<select aria-label="执行 workspace" value={controller.connection?.id??''} disabled={controller.busy} onChange={e=>controller.setConnectionId(e.target.value)}><option value="" disabled>先安装本项目客户端</option>{controller.connections.map(c=><option value={c.id} key={c.id}>{c.name} · {c.agentReady?'Agent 可用':'Agent 未就绪'}</option>)}</select></label>
     {controller.connection&&<p>目标工作区：{controller.connection.workspace||controller.connection.name}{controller.connection.agentError?' · '+controller.connection.agentError:''}</p>}
